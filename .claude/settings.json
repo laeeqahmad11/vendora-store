@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e 'let d=\"\";process.stdin.on\\(\"data\",c=>d+=c\\).on\\(\"end\",\\(\\)=>{const j=JSON.parse\\(d\\);if\\(j.error\\){console.log\\(\"ERROR:\",j.error.status,\"-\",j.error.message.slice\\(0,200\\)\\)}else{console.log\\(\"OK:\",JSON.stringify\\(j\\).slice\\(0,300\\)\\)}}\\)')",
+      "Bash(node -e 'let d=\"\";process.stdin.on\\(\"data\",c=>d+=c\\).on\\(\"end\",\\(\\)=>{const j=JSON.parse\\(d\\);if\\(j.error\\){console.log\\(\"ERR:\",j.error.status\\)}else{const a=j.billingAccounts||[];console.log\\(\"count:\",a.length\\);a.forEach\\(x=>console.log\\(\" -\",x.name,x.displayName,\"open=\"+x.open\\)\\)}}\\)')",
+      "Bash(npx --no-install playwright --version)",
+      "Bash(export SCRATCH=\"/private/tmp/claude-501/-Users-ismaiel-Documents-CaludeProjects-ecomerace-store/837b5d6e-4a30-47d7-b1c9-43a7ca2d1758/scratchpad\")",
+      "Bash(npm init *)",
+      "Bash(npm install *)",
+      "Bash(npx playwright *)",
+      "Bash(node upload-test.mjs)",
+      "Bash(sed -i '' \"s/waitUntil: 'networkidle'/waitUntil: 'domcontentloaded'/g\" upload-test.mjs)"
+    ]
+  }
+}

@@ -1,0 +1,235 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------ helpers
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return signedIn() && userDoc().role == 'admin';
+    }
+
+    function isMerchant() {
+      return signedIn() && userDoc().role == 'merchant';
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function ownsStore(storeId) {
+      return signedIn()
+        && get(/databases/$(database)/documents/stores/$(storeId)).data.ownerId == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------- users
+    match /users/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+      // Users may create their own profile but never grant themselves a role
+      allow create: if isSelf(uid)
+        && request.resource.data.role == 'customer'
+        && request.resource.data.suspended == false;
+      // Users can edit their own profile but cannot change role/suspended/storeId
+      allow update: if (isSelf(uid)
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.suspended == resource.data.suspended)
+        || isAdmin();
+      allow delete: if isAdmin();
+
+      match /addresses/{addressId} {
+        allow read, write: if isSelf(uid);
+      }
+    }
+
+    // ------------------------------------------------------------- stores
+    match /stores/{storeId} {
+      // Public storefront needs approved stores; owners/admin see their own
+      allow read: if true;
+      // Any signed-in user may apply — but only as a pending store they own
+      allow create: if signedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      // Owner may edit profile fields but not self-approve or self-verify
+      allow update: if (signedIn()
+          && resource.data.ownerId == request.auth.uid
+          && request.resource.data.status == resource.data.status
+          || (signedIn()
+              && resource.data.ownerId == request.auth.uid
+              && resource.data.status == 'rejected'
+              && request.resource.data.status == 'pending'))
+        || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ----------------------------------------------------------- products
+    match /products/{productId} {
+      // Approved products are public; merchants see their own store's; admin sees all
+      allow read: if resource.data.status == 'approved'
+        || isAdmin()
+        || (signedIn() && resource.data.merchantId == request.auth.uid)
+        || (signedIn() && ownsStore(resource.data.storeId));
+      // Merchants create products for their own approved store, never pre-approved
+      allow create: if isMerchant()
+        && request.resource.data.merchantId == request.auth.uid
+        && ownsStore(request.resource.data.storeId)
+        && request.resource.data.status in ['draft', 'pending'];
+      // Merchant may edit own product but cannot set status to approved.
+      // Signed-in users may bump counters (view/sold/stock/rating) — kept
+      // permissive for the COD flow; tighten with Cloud Functions in prod.
+      allow update: if isAdmin()
+        || (signedIn()
+            && resource.data.merchantId == request.auth.uid
+            && request.resource.data.status != 'approved')
+        || (signedIn()
+            && resource.data.merchantId == request.auth.uid
+            && resource.data.status == 'approved'
+            && request.resource.data.status == 'approved')
+        || (signedIn()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['viewCount', 'soldCount', 'stock', 'rating', 'ratingCount', 'updatedAt']));
+      allow delete: if isAdmin() || (signedIn() && resource.data.merchantId == request.auth.uid);
+    }
+
+    // ------------------------------------------------------------- orders
+    match /orders/{orderId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid)
+        || (signedIn() && resource.data.merchantId == request.auth.uid)
+        || (signedIn() && ownsStore(resource.data.storeId));
+      // Customers place their own COD orders
+      allow create: if signedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.paymentMethod == 'cod'
+        && request.resource.data.status == 'pending'
+        && request.resource.data.cashReceived == false;
+      // Merchant drives fulfilment; customer may cancel/request return.
+      // Only the order's merchant can confirm cash received.
+      allow update: if (signedIn() && resource.data.merchantId == request.auth.uid)
+        || (signedIn()
+            && resource.data.customerId == request.auth.uid
+            && request.resource.data.cashReceived == resource.data.cashReceived
+            && request.resource.data.status in ['cancelled', 'refund_requested'])
+        || (isAdmin() && request.resource.data.cashReceived == resource.data.cashReceived);
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------ catalog (admin-owned)
+    match /categories/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /brands/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /collections/{id} {
+      allow read: if true;
+      // Merchants manage their own store collections; admin manages global
+      allow create: if isAdmin()
+        || (isMerchant() && request.resource.data.storeId is string && ownsStore(request.resource.data.storeId));
+      allow update, delete: if isAdmin()
+        || (isMerchant() && resource.data.storeId is string && ownsStore(resource.data.storeId));
+    }
+
+    // ------------------------------------------------------------- reviews
+    match /reviews/{id} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.customerId == request.auth.uid;
+      // Author edits own review; store owner moderates (status/reply); admin all.
+      allow update: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid)
+        || (signedIn() && ownsStore(resource.data.storeId))
+        || (signedIn()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['helpfulCount', 'reported', 'updatedAt']));
+      allow delete: if isAdmin() || (signedIn() && resource.data.customerId == request.auth.uid);
+    }
+
+    // ------------------------------------------------- coupons & promotions
+    match /coupons/{id} {
+      allow read: if true; // codes validated client-side at checkout
+      allow create: if isAdmin() || (isMerchant() && ownsStore(request.resource.data.storeId));
+      allow update: if isAdmin()
+        || (isMerchant() && resource.data.storeId is string && ownsStore(resource.data.storeId))
+        || (signedIn()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedCount', 'updatedAt']));
+      allow delete: if isAdmin()
+        || (isMerchant() && resource.data.storeId is string && ownsStore(resource.data.storeId));
+    }
+    match /promotions/{id} {
+      allow read: if true;
+      allow create: if isAdmin() || (isMerchant() && ownsStore(request.resource.data.storeId));
+      allow update, delete: if isAdmin()
+        || (isMerchant() && resource.data.storeId is string && ownsStore(resource.data.storeId));
+    }
+
+    // -------------------------------------------------------- notifications
+    match /notifications/{id} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn(); // cross-user notifications (order events etc.)
+      allow update: if signedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // ------------------------------------------------------------------ cms
+    match /blogs/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /faqs/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /pages/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /banners/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // -------------------------------------------------------------- support
+    match /supportTickets/{id} {
+      allow read: if isAdmin() || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.customerId == request.auth.uid;
+      allow update: if isAdmin() || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    // ------------------------------------------------------------- logging
+    match /activityLogs/{id} {
+      allow read: if isAdmin();
+      allow create: if signedIn();
+      allow update, delete: if false;
+    }
+    match /inventoryLogs/{id} {
+      allow read: if isAdmin() || (signedIn() && ownsStore(resource.data.storeId));
+      allow create: if signedIn();
+      allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------- newsletter
+    match /newsletter/{id} {
+      allow read: if isAdmin();
+      allow create: if true;
+      allow update, delete: if isAdmin();
+    }
+
+    // Deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

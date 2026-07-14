@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(firebase firestore:databases:create \"\\(default\\)\" --location nam5 --project vendora-store-30319)",
+      "Bash(node -e ' *)",
+      "Bash(firebase deploy *)",
+      "Bash(node -e 'let d=\"\";process.stdin.on\\(\"data\",c=>d+=c\\).on\\(\"end\",\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\(j.error?\\(\"ERROR: \"+j.error.status+\" \"+j.error.message.slice\\(0,200\\)\\):\"OK \"+JSON.stringify\\(j\\).slice\\(0,150\\)\\)}\\)')",
+      "Bash(node -e 'let d=\"\";process.stdin.on\\(\"data\",c=>d+=c\\).on\\(\"end\",\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\(j.error?\\(\"ERROR: \"+j.error.status+\" \"+j.error.message.slice\\(0,120\\)\\):\"config exists: \"+JSON.stringify\\(j\\).slice\\(0,200\\)\\)}\\)')",
+      "Bash(node -e 'let d=\"\";process.stdin.on\\(\"data\",c=>d+=c\\).on\\(\"end\",\\(\\)=>{const j=JSON.parse\\(d\\);if\\(j.error\\){console.log\\(\"ERROR:\",j.error.status,j.error.message.slice\\(0,120\\)\\)}else{console.log\\(\"email.enabled =\", j.signIn&&j.signIn.email&&j.signIn.email.enabled\\)}}\\)')",
+      "Bash(npm run *)",
+      "Bash(node -e 'let d=\"\";process.stdin.on\\(\"data\",c=>d+=c\\).on\\(\"end\",\\(\\)=>{const j=JSON.parse\\(d\\);if\\(j.error\\){console.log\\(\"✅ correctly DENIED:\",j.error.status\\)}else{console.log\\(\"⚠️ ALLOWED — isolation gap \\(\",j.filter\\(x=>x.document\\).length,\"docs\\)\"\\)}}\\)')",
+      "Bash(curl -s -o /dev/null -w \"https://vendora-store-30319.web.app -> HTTP %{http_code}\\\\n\" https://vendora-store-30319.web.app)",
+      "Bash(node -e 'let d=\"\";process.stdin.on\\(\"data\",c=>d+=c\\).on\\(\"end\",\\(\\)=>{const j=JSON.parse\\(d\\);if\\(j.error\\){console.log\\(\"ERROR:\",j.error.code,j.error.message.slice\\(0,120\\)\\)}else{console.log\\(\"GCS buckets:\",\\(j.items||[]\\).map\\(b=>b.name\\).join\\(\", \"\\)||\"\\(none\\)\"\\)}}\\)')"
+    ]
+  }
+}

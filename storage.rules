@@ -1,0 +1,32 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Public read for all marketplace assets (product images, logos, banners)
+    match /{allPaths=**} {
+      allow read: if true;
+    }
+
+    // Authenticated users upload into scoped folders, images capped at 5 MB
+    match /stores/{storeId}/{allPaths=**} {
+      allow write: if request.auth != null
+        && request.resource.size < 5 * 1024 * 1024;
+    }
+    match /users/{uid}/{allPaths=**} {
+      allow write: if request.auth != null && request.auth.uid == uid
+        && request.resource.size < 5 * 1024 * 1024;
+    }
+    match /cms/{allPaths=**} {
+      allow write: if request.auth != null
+        && request.resource.size < 5 * 1024 * 1024;
+    }
+    match /reviews/{allPaths=**} {
+      allow write: if request.auth != null
+        && request.resource.size < 5 * 1024 * 1024;
+    }
+    match /applications/{allPaths=**} {
+      allow write: if request.auth != null
+        && request.resource.size < 10 * 1024 * 1024;
+    }
+  }
+}
