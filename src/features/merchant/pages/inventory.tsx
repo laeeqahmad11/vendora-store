@@ -364,14 +364,8 @@ export default function InventoryPage() {
     URL.revokeObjectURL(url)
   }
 
-  const escapeHtml = (value: string) =>
-    value
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#039;')
-
+                                
+  
   const exportInventoryPdf = () => {
     const pdf = new jsPDF({
       orientation: 'landscape',
