@@ -3,6 +3,7 @@ import {
   Link,
   NavLink,
   Outlet,
+  useLocation,
   useNavigate,
 } from 'react-router-dom'
 import toast from 'react-hot-toast'
@@ -172,16 +173,12 @@ function UserMenu({
         )}
 
         {role === 'merchant' ? (
-          <DropdownMenuItem
-            onClick={() => navigate('/merchant')}
-          >
+          <DropdownMenuItem onClick={() => navigate('/merchant')}>
             <Store />
             Merchant dashboard
           </DropdownMenuItem>
         ) : role === 'customer' ? (
-          <DropdownMenuItem
-            onClick={() => navigate('/merchant')}
-          >
+          <DropdownMenuItem onClick={() => navigate('/merchant')}>
             <Store />
             Sell on {APP_NAME}
           </DropdownMenuItem>
@@ -364,11 +361,55 @@ function CartButton({
 
 export function StorefrontLayout() {
   const items = useCartStore(selectItems)
+  const location = useLocation()
 
   const cartCount = React.useMemo(
     () => getCount(items),
     [items],
   )
+
+  React.useLayoutEffect(() => {
+    if ('scrollRestoration' in window.history) {
+      window.history.scrollRestoration = 'manual'
+    }
+
+    const resetScrollPosition = () => {
+      window.scrollTo({
+        top: 0,
+        left: 0,
+        behavior: 'auto',
+      })
+
+      document.documentElement.scrollTop = 0
+      document.body.scrollTop = 0
+    }
+
+    resetScrollPosition()
+
+    const animationFrame = window.requestAnimationFrame(
+      resetScrollPosition,
+    )
+
+    const shortTimeout = window.setTimeout(
+      resetScrollPosition,
+      50,
+    )
+
+    const contentTimeout = window.setTimeout(
+      resetScrollPosition,
+      200,
+    )
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame)
+      window.clearTimeout(shortTimeout)
+      window.clearTimeout(contentTimeout)
+    }
+  }, [
+    location.key,
+    location.pathname,
+    location.search,
+  ])
 
   return (
     <div className="flex min-h-screen w-full min-w-0 flex-col">
@@ -381,7 +422,6 @@ export function StorefrontLayout() {
       )}
 
       <header className="glass sticky top-0 z-40 w-full border-b">
-        {/* Mobile header */}
         <div className="mx-auto flex h-16 w-full min-w-0 items-center px-3 lg:hidden">
           <MobileMenu />
 
@@ -393,15 +433,11 @@ export function StorefrontLayout() {
             <ThemeToggle />
             <NotificationsBell />
             <CartButton cartCount={cartCount} />
-
-            {/* Avatar hides below 640px.
-                Account remains available inside mobile menu. */}
             <UserMenu mobileHidden />
           </div>
         </div>
 
-        {/* Desktop header */}
-        <div className="mx-auto hidden h-16 w-full max-w-7xl items-center gap-4 sm:p-5 px-6 lg:flex">
+        <div className="mx-auto hidden h-16 w-full max-w-7xl items-center gap-4 px-6 sm:p-5 lg:flex">
           <Logo />
 
           <nav className="flex shrink-0 items-center gap-1">
@@ -431,7 +467,6 @@ export function StorefrontLayout() {
           </div>
         </div>
 
-        {/* Mobile search */}
         <div className="w-full border-t px-3 pb-2 pt-2 lg:hidden">
           <SearchBar />
         </div>

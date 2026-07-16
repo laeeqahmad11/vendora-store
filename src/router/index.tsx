@@ -1,4 +1,7 @@
-import { createBrowserRouter, Outlet } from 'react-router-dom'
+import {
+  createBrowserRouter,
+  Outlet,
+} from 'react-router-dom'
 import { StorefrontLayout } from '@/layouts/storefront-layout'
 import {
   AuthLayout,
@@ -7,21 +10,18 @@ import {
   RegisterPage,
   SuspendedPage,
 } from '@/features/auth/auth-pages'
-import { RequireAuth, RequireRole } from '@/components/shared/route-guards'
+import {
+  RequireAuth,
+  RequireRole,
+} from '@/components/shared/route-guards'
 import { NotFoundPage } from '@/components/shared/not-found'
-import { ScrollToTop } from '@/components/shared/scroll-to-top'
 import { storefrontRoutes } from '@/features/storefront/routes'
 import { customerRoutes } from '@/features/customer/routes'
 import { merchantRoutes } from '@/features/merchant/routes'
 import { adminRoutes } from '@/features/admin/routes'
 
 function RootLayout() {
-  return (
-    <>
-      <ScrollToTop />
-      <Outlet />
-    </>
-  )
+  return <Outlet />
 }
 
 export const router = createBrowserRouter([
@@ -35,7 +35,7 @@ export const router = createBrowserRouter([
           ...storefrontRoutes,
           {
             element: <RequireAuth />,
-            children: customerRoutes, // /account/*
+            children: customerRoutes,
           },
           {
             path: '*',
@@ -62,9 +62,6 @@ export const router = createBrowserRouter([
         ],
       },
       {
-        // /merchant is auth-gated, not role-gated.
-        // Customers see the store application flow.
-        // Approved merchants see the merchant dashboard.
         path: '/merchant',
         element: <RequireAuth />,
         children: merchantRoutes,
