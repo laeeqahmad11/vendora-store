@@ -225,9 +225,20 @@ export default function OrderDetailPage() {
 
           html,
           body {
+            width: 100% !important;
+            height: auto !important;
             margin: 0 !important;
             padding: 0 !important;
+            overflow: visible !important;
             background: #ffffff !important;
+          }
+
+          header,
+          aside,
+          nav,
+          [role='navigation'],
+          .print\:hidden {
+            display: none !important;
           }
 
           body * {
@@ -240,17 +251,21 @@ export default function OrderDetailPage() {
           }
 
           .merchant-print-invoice {
-            position: absolute !important;
-            inset: 0 auto auto 0 !important;
-            width: 100% !important;
+            display: block !important;
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            width: auto !important;
             min-height: 0 !important;
             margin: 0 !important;
             padding: 0 !important;
             overflow: visible !important;
+            transform: none !important;
             background: #ffffff !important;
             color: #000000 !important;
             font-size: 11px !important;
-            line-height: 1.35 !important;
+            line-height: 1.3 !important;
           }
 
           .merchant-print-invoice table {
