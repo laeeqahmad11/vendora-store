@@ -17,6 +17,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -97,6 +98,7 @@ export default function DashboardHomePage() {
 
   const recentOrders = orders.slice(0, 8)
   const pendingReviewCount = products.filter((p) => p.status === 'pending').length
+  const hasRevenue = revenueByDay.some((entry) => entry.revenue > 0)
 
   const loading = productsQ.isLoading || ordersQ.isLoading
 
@@ -142,15 +144,35 @@ export default function DashboardHomePage() {
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <StatCard title="Revenue" value={formatCurrency(stats.revenue)} icon={DollarSign} hint="Completed orders" />
-          <StatCard title="Total orders" value={formatNumber(orders.length)} icon={ShoppingCart} />
-          <StatCard title="Pending orders" value={formatNumber(stats.pendingOrders)} icon={Clock} hint="Awaiting confirmation" />
-          <StatCard title="Products" value={formatNumber(products.length)} icon={Package} />
           <StatCard
-            title="Low stock"
+            title="Revenue"
+            value={formatCurrency(stats.revenue)}
+            icon={DollarSign}
+            hint="Completed orders"
+          />
+          <StatCard
+            title="Total Orders"
+            value={formatNumber(orders.length)}
+            icon={ShoppingCart}
+            hint="All orders received"
+          />
+          <StatCard
+            title="Pending Orders"
+            value={formatNumber(stats.pendingOrders)}
+            icon={Clock}
+            hint="Awaiting confirmation"
+          />
+          <StatCard
+            title="Active Products"
+            value={formatNumber(products.filter((product) => product.status !== 'archived').length)}
+            icon={Package}
+            hint="Currently listed"
+          />
+          <StatCard
+            title="Low Stock"
             value={formatNumber(stats.lowStock)}
             icon={AlertTriangle}
-            hint={`${stats.outOfStock} out of stock`}
+            hint={`${stats.lowStock} Low • ${stats.outOfStock} Out of Stock`}
           />
         </div>
       )}
@@ -163,21 +185,36 @@ export default function DashboardHomePage() {
           </CardHeader>
           <CardContent>
             <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={revenueByDay} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-                  <XAxis dataKey="day" tick={{ fontSize: 11 }} interval="preserveStartEnd" tickLine={false} />
-                  <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={48} />
-                  <Tooltip formatter={(v) => formatCurrency(Number(v))} />
-                  <Area type="monotone" dataKey="revenue" stroke="var(--color-primary)" fill="url(#revGrad)" strokeWidth={2} />
-                </AreaChart>
-              </ResponsiveContainer>
+              {!hasRevenue ? (
+                <EmptyState
+                  icon={DollarSign}
+                  title="No completed orders yet"
+                  description="Revenue will appear here once an order is completed."
+                  className="h-full py-8"
+                />
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={revenueByDay} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
+                    <XAxis dataKey="day" tick={{ fontSize: 11 }} interval="preserveStartEnd" tickLine={false} />
+                    <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={48} />
+                    <Tooltip formatter={(v) => formatCurrency(Number(v))} />
+                    <Area
+                      type="monotone"
+                      dataKey="revenue"
+                      stroke="var(--color-primary)"
+                      fill="url(#revGrad)"
+                      strokeWidth={2}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -198,7 +235,9 @@ export default function DashboardHomePage() {
                     <XAxis dataKey="name" tick={{ fontSize: 10 }} tickLine={false} interval={0} angle={-20} textAnchor="end" height={50} />
                     <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={32} allowDecimals={false} />
                     <Tooltip />
-                    <Bar dataKey="units" fill="var(--color-primary)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="units" fill="var(--color-primary)" radius={[4, 4, 0, 0]}>
+                      <LabelList dataKey="units" position="top" className="fill-foreground text-xs" />
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               )}
