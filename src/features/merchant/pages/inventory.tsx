@@ -17,6 +17,7 @@ import {
   Plus,
   Search,
   Warehouse,
+  X,
   XCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -487,7 +488,7 @@ export default function InventoryPage() {
             <CardContent className="flex h-full min-h-[112px] items-center justify-between gap-2 p-3 sm:min-h-[124px] sm:gap-4 sm:p-5">
               <div className="min-w-0">
                 <p className="truncate text-xs text-muted-foreground sm:text-sm">
-                  Total products
+                  Products
                 </p>
 
                 <p className="mt-1 truncate text-xl font-bold sm:text-2xl">
@@ -502,35 +503,23 @@ export default function InventoryPage() {
           </Card>
         </button>
 
-        <button
-          type="button"
-          onClick={() => setTab('all')}
-          className="min-w-0 rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-        >
-          <Card
-            className={
-              tab === 'all'
-                ? 'h-full border-primary/40 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md'
-                : 'h-full transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md'
-            }
-          >
-            <CardContent className="flex h-full min-h-[112px] items-center justify-between gap-2 p-3 sm:min-h-[124px] sm:gap-4 sm:p-5">
-              <div className="min-w-0">
-                <p className="truncate text-xs text-muted-foreground sm:text-sm">
-                  Total stock
-                </p>
+        <Card className="h-full">
+          <CardContent className="flex h-full min-h-[112px] items-center justify-between gap-2 p-3 sm:min-h-[124px] sm:gap-4 sm:p-5">
+            <div className="min-w-0">
+              <p className="truncate text-xs text-muted-foreground sm:text-sm">
+                Available units
+              </p>
 
-                <p className="mt-1 truncate text-xl font-bold sm:text-2xl">
-                  {formatNumber(totalStock)}
-                </p>
-              </div>
+              <p className="mt-1 truncate text-xl font-bold sm:text-2xl">
+                {formatNumber(totalStock)}
+              </p>
+            </div>
 
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary sm:size-11 sm:rounded-xl">
-                <Boxes className="size-4 sm:size-5" />
-              </div>
-            </CardContent>
-          </Card>
-        </button>
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary sm:size-11 sm:rounded-xl">
+              <Boxes className="size-4 sm:size-5" />
+            </div>
+          </CardContent>
+        </Card>
 
         <button
           type="button"
@@ -630,18 +619,31 @@ export default function InventoryPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by product name or SKU..."
-            className="w-full pl-9"
+            className="w-full pl-9 pr-10"
           />
+
+          {search && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Clear search"
+              className="absolute right-1 top-1/2 size-8 -translate-y-1/2 text-muted-foreground"
+              onClick={() => setSearch('')}
+            >
+              <X className="size-4" />
+            </Button>
+          )}
         </div>
       </div>
 
-      <div className="-mx-1 overflow-x-auto px-1 pb-1">
+      <div className="-mx-1 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <Tabs
           value={tab}
           onValueChange={(v) => setTab(v as StockTab)}
           className="w-max min-w-full"
         >
-          <TabsList className="inline-flex h-auto min-w-max">
+          <TabsList className="inline-flex h-auto min-w-max gap-1">
             <TabsTrigger
               value="all"
               className="whitespace-nowrap px-3 text-xs sm:px-4 sm:text-sm"
@@ -697,8 +699,18 @@ export default function InventoryPage() {
                 : 'You are all set here.'
           }
           action={
-            tab === 'all' &&
-            !searchTerm && (
+            searchTerm || tab !== 'all' ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setSearch('')
+                  setTab('all')
+                }}
+              >
+                Clear filters
+              </Button>
+            ) : (
               <Button asChild>
                 <Link to="/merchant/products/new">Add product</Link>
               </Button>
@@ -774,10 +786,10 @@ export default function InventoryPage() {
                             <img
                               src={p.images[0]}
                               alt=""
-                              className="size-9 shrink-0 rounded-lg border object-cover"
+                              className="size-10 shrink-0 rounded-lg border object-cover"
                             />
                           ) : (
-                            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+                            <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
                               <Package className="size-4 text-muted-foreground" />
                             </span>
                           )}
@@ -866,7 +878,7 @@ export default function InventoryPage() {
                           size="sm"
                           onClick={() => setAdjusting(p)}
                         >
-                          Adjust
+                          Adjust stock
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -878,8 +890,15 @@ export default function InventoryPage() {
         </div>
       )}
 
+      {!productsQ.isLoading && visible.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          Showing {visible.length} of {products.length}{' '}
+          {products.length === 1 ? 'product' : 'products'}
+        </p>
+      )}
+
       <Card className="min-w-0 overflow-hidden">
-  <CardHeader className="border-b p-4 sm:p-6">
+        <CardHeader className="border-b p-4 sm:p-6">
           <CardTitle className="flex items-center gap-2">
             <History className="size-4 shrink-0" />
             Inventory log
@@ -890,7 +909,7 @@ export default function InventoryPage() {
           </CardDescription>
         </CardHeader>
 
-        <CardContent className="max-h-[460px] overflow-y-auto p-4 sm:p-6">
+        <CardContent className="max-h-[420px] overflow-y-auto p-4 sm:p-6">
           {logsQ.isLoading ? (
             <TableSkeleton rows={4} />
           ) : logsQ.isError ? (
