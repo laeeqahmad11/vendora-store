@@ -327,7 +327,7 @@ export default function OrdersListPage() {
       )}
 
       <div className="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="-mx-1 min-w-0 overflow-x-auto px-1 pb-1">
+        <div className="-mx-1 min-w-0 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <Tabs
             value={tab}
             onValueChange={(value) =>
@@ -335,7 +335,7 @@ export default function OrdersListPage() {
             }
             className="w-max min-w-full"
           >
-            <TabsList className="inline-flex h-auto min-w-max">
+            <TabsList className="inline-flex h-auto min-w-max gap-1">
               {TABS.map((item) => (
                 <TabsTrigger
                   key={item.value}
@@ -353,7 +353,7 @@ export default function OrdersListPage() {
           </Tabs>
         </div>
 
-        <div className="relative w-full shrink-0 xl:w-80">
+        <div className="relative w-full shrink-0 xl:w-[320px]">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 
           <Input
