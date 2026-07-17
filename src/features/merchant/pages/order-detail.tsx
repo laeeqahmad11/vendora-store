@@ -216,14 +216,70 @@ export default function OrderDetailPage() {
 
   return (
     <div className="space-y-6">
+      <style>{`
+        @media print {
+          @page {
+            size: A4 portrait;
+            margin: 8mm;
+          }
+
+          html,
+          body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+          }
+
+          body * {
+            visibility: hidden !important;
+          }
+
+          .merchant-print-invoice,
+          .merchant-print-invoice * {
+            visibility: visible !important;
+          }
+
+          .merchant-print-invoice {
+            position: absolute !important;
+            inset: 0 auto auto 0 !important;
+            width: 100% !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: visible !important;
+            background: #ffffff !important;
+            color: #000000 !important;
+            font-size: 11px !important;
+            line-height: 1.35 !important;
+          }
+
+          .merchant-print-invoice table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+            page-break-inside: auto !important;
+          }
+
+          .merchant-print-invoice thead {
+            display: table-header-group !important;
+          }
+
+          .merchant-print-invoice tr,
+          .merchant-print-invoice .invoice-totals,
+          .merchant-print-invoice .invoice-notes,
+          .merchant-print-invoice .invoice-footer {
+            break-inside: avoid !important;
+            page-break-inside: avoid !important;
+          }
+        }
+      `}</style>
       {/* =====================================================
           PRINTABLE INVOICE
           This section only appears in print/PDF mode
       ====================================================== */}
 
-      <div className="hidden bg-white text-black print:block print:min-h-screen print:p-8">
+      <div className="merchant-print-invoice hidden bg-white text-black print:block">
         {/* Invoice header */}
-        <div className="flex items-start justify-between gap-8 border-b border-gray-300 pb-5">
+        <div className="flex items-start justify-between gap-6 border-b border-gray-300 pb-3">
           <div>
             <div className="flex items-center gap-3">
               <div className="flex size-11 items-center justify-center rounded-xl bg-black text-lg font-bold text-white">
@@ -241,7 +297,7 @@ export default function OrderDetailPage() {
               </div>
             </div>
 
-            <h1 className="mt-6 text-3xl font-extrabold tracking-tight">
+            <h1 className="mt-4 text-3xl font-extrabold tracking-tight">
               Invoice
             </h1>
 
@@ -277,7 +333,7 @@ export default function OrderDetailPage() {
         </div>
 
         {/* Customer and order information */}
-        <div className="mt-6 grid grid-cols-2 gap-10">
+        <div className="mt-4 grid grid-cols-2 gap-8">
           <div>
             <p className="text-xs font-bold uppercase tracking-wider text-gray-500">
               Bill to
@@ -362,22 +418,22 @@ export default function OrderDetailPage() {
         </div>
 
         {/* Items table */}
-        <table className="mt-8 w-full border-collapse text-sm">
+        <table className="mt-5 w-full border-collapse text-sm">
           <thead className="bg-gray-100">
             <tr>
-              <th className="border-y border-gray-300 px-3 py-3 text-left text-xs font-bold uppercase tracking-wider">
+              <th className="border-y border-gray-300 px-3 py-2 text-left text-xs font-bold uppercase tracking-wider">
                 Item
               </th>
 
-              <th className="border-y border-gray-300 px-3 py-3 text-right text-xs font-bold uppercase tracking-wider">
+              <th className="border-y border-gray-300 px-3 py-2 text-right text-xs font-bold uppercase tracking-wider">
                 Qty
               </th>
 
-              <th className="border-y border-gray-300 px-3 py-3 text-right text-xs font-bold uppercase tracking-wider">
+              <th className="border-y border-gray-300 px-3 py-2 text-right text-xs font-bold uppercase tracking-wider">
                 Price
               </th>
 
-              <th className="border-y border-gray-300 px-3 py-3 text-right text-xs font-bold uppercase tracking-wider">
+              <th className="border-y border-gray-300 px-3 py-2 text-right text-xs font-bold uppercase tracking-wider">
                 Total
               </th>
             </tr>
@@ -386,7 +442,7 @@ export default function OrderDetailPage() {
           <tbody>
             {order.items.map((item, i) => (
               <tr key={`${item.productId}-${i}`}>
-                <td className="border-b border-gray-200 px-3 py-4">
+                <td className="border-b border-gray-200 px-3 py-2.5">
                   <p className="font-medium">
                     {item.name}
                   </p>
@@ -411,15 +467,15 @@ export default function OrderDetailPage() {
                   )}
                 </td>
 
-                <td className="border-b border-gray-200 px-3 py-4 text-right">
+                <td className="border-b border-gray-200 px-3 py-2.5 text-right">
                   {item.quantity}
                 </td>
 
-                <td className="border-b border-gray-200 px-3 py-4 text-right">
+                <td className="border-b border-gray-200 px-3 py-2.5 text-right">
                   {formatCurrency(item.price)}
                 </td>
 
-                <td className="border-b border-gray-200 px-3 py-4 text-right font-semibold">
+                <td className="border-b border-gray-200 px-3 py-2.5 text-right font-semibold">
                   {formatCurrency(
                     item.price * item.quantity,
                   )}
@@ -430,7 +486,7 @@ export default function OrderDetailPage() {
         </table>
 
         {/* Totals */}
-        <div className="mt-8 ml-auto w-full max-w-sm rounded-xl border border-gray-300 bg-gray-50 p-5 text-sm">
+        <div className="invoice-totals mt-5 ml-auto w-full max-w-sm rounded-lg border border-gray-300 bg-gray-50 p-4 text-sm">
           <div className="space-y-2">
             <p className="flex justify-between gap-4">
               <span className="text-gray-600">
@@ -478,7 +534,7 @@ export default function OrderDetailPage() {
             </p>
           </div>
 
-          <div className="mt-4 border-t border-gray-300 pt-4">
+          <div className="mt-3 border-t border-gray-300 pt-3">
             <p className="flex items-center justify-between gap-4 text-lg font-extrabold">
               <span>Total (COD)</span>
 
@@ -492,7 +548,7 @@ export default function OrderDetailPage() {
         {/* Notes */}
         {(order.specialInstructions ||
           order.giftNote) && (
-          <div className="mt-8 rounded-xl border border-gray-300 p-5">
+          <div className="invoice-notes mt-5 rounded-lg border border-gray-300 p-4">
             <p className="text-xs font-bold uppercase tracking-wider text-gray-500">
               Customer notes
             </p>
@@ -524,7 +580,7 @@ export default function OrderDetailPage() {
         )}
 
         {/* Invoice footer */}
-        <div className="mt-12 border-t border-gray-300 pt-5 text-center">
+        <div className="invoice-footer mt-6 border-t border-gray-300 pt-3 text-center">
           <p className="text-sm font-semibold">
             Thank you for shopping with{' '}
             {order.storeName}.
