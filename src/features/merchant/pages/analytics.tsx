@@ -93,10 +93,14 @@ export default function AnalyticsPage() {
 
   const allOrders = ordersQ.data ?? []
 
-  const rangeStart = dayjs()
-    .subtract(days - 1, 'day')
-    .startOf('day')
-    .valueOf()
+  const rangeStart = React.useMemo(
+    () =>
+      dayjs()
+        .subtract(days - 1, 'day')
+        .startOf('day')
+        .valueOf(),
+    [days],
+  )
 
   const orders = React.useMemo(
     () =>
@@ -317,6 +321,8 @@ export default function AnalyticsPage() {
     rangeStart,
   ])
 
+  const chartKey = `${store.id}-${range}-${orders.length}`
+
   const exportOrders = () => {
     downloadCsv(
       `orders-${store.slug}-${range}d.csv`,
@@ -463,7 +469,7 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      <div className="grid min-w-0 gap-5 xl:grid-cols-2">
+      <div className="grid min-w-0 items-start gap-5 xl:grid-cols-2">
         <Card className="min-w-0 overflow-hidden">
           <CardHeader className="p-4 sm:p-6">
             <CardTitle>Revenue</CardTitle>
@@ -473,14 +479,16 @@ export default function AnalyticsPage() {
             </CardDescription>
           </CardHeader>
 
-          <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-            <div className="h-[260px] w-full sm:h-[300px]">
+          <CardContent className="min-w-0 p-4 pt-0 sm:p-6 sm:pt-0">
+            <div className="h-[260px] min-h-[260px] w-full sm:h-[300px] sm:min-h-[300px]">
               {ordersQ.isLoading ? (
                 <Skeleton className="size-full" />
               ) : (
                 <ResponsiveContainer
+                  key={`revenue-${chartKey}`}
                   width="100%"
                   height="100%"
+                  debounce={100}
                 >
                   <AreaChart
                     data={data.series}
@@ -548,6 +556,7 @@ export default function AnalyticsPage() {
                       stroke="var(--color-primary)"
                       fill="url(#anaRev)"
                       strokeWidth={2}
+                      isAnimationActive={false}
                     />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -567,14 +576,16 @@ export default function AnalyticsPage() {
             </CardDescription>
           </CardHeader>
 
-          <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-            <div className="h-[260px] w-full sm:h-[300px]">
+          <CardContent className="min-w-0 p-4 pt-0 sm:p-6 sm:pt-0">
+            <div className="h-[260px] min-h-[260px] w-full sm:h-[300px] sm:min-h-[300px]">
               {ordersQ.isLoading ? (
                 <Skeleton className="size-full" />
               ) : (
                 <ResponsiveContainer
+                  key={`orders-${chartKey}`}
                   width="100%"
                   height="100%"
+                  debounce={100}
                 >
                   <BarChart
                     data={data.series}
@@ -613,6 +624,7 @@ export default function AnalyticsPage() {
                       dataKey="orders"
                       fill="var(--color-primary)"
                       radius={[4, 4, 0, 0]}
+                      isAnimationActive={false}
                     />
                   </BarChart>
                 </ResponsiveContainer>
@@ -632,8 +644,8 @@ export default function AnalyticsPage() {
             </CardDescription>
           </CardHeader>
 
-          <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-            <div className="h-[280px] w-full sm:h-[320px]">
+          <CardContent className="min-w-0 p-4 pt-0 sm:p-6 sm:pt-0">
+            <div className="h-[280px] min-h-[280px] w-full sm:h-[320px] sm:min-h-[320px]">
               {data.topProducts.length ===
               0 ? (
                 <EmptyState
@@ -643,8 +655,10 @@ export default function AnalyticsPage() {
                 />
               ) : (
                 <ResponsiveContainer
+                  key={`products-${chartKey}`}
                   width="100%"
                   height="100%"
+                  debounce={100}
                 >
                   <BarChart
                     data={data.topProducts}
@@ -690,6 +704,7 @@ export default function AnalyticsPage() {
                       dataKey="revenue"
                       fill="var(--color-primary)"
                       radius={[0, 4, 4, 0]}
+                      isAnimationActive={false}
                     />
                   </BarChart>
                 </ResponsiveContainer>
@@ -709,8 +724,8 @@ export default function AnalyticsPage() {
             </CardDescription>
           </CardHeader>
 
-          <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-            <div className="h-[260px] w-full sm:h-[300px]">
+          <CardContent className="min-w-0 p-4 pt-0 sm:p-6 sm:pt-0">
+            <div className="h-[260px] min-h-[260px] w-full sm:h-[300px] sm:min-h-[300px]">
               {data.statusDist.length ===
               0 ? (
                 <EmptyState
@@ -720,8 +735,10 @@ export default function AnalyticsPage() {
                 />
               ) : (
                 <ResponsiveContainer
+                  key={`status-${chartKey}`}
                   width="100%"
                   height="100%"
+                  debounce={100}
                 >
                   <PieChart>
                     <Pie
@@ -731,6 +748,7 @@ export default function AnalyticsPage() {
                       innerRadius={55}
                       outerRadius={85}
                       paddingAngle={2}
+                      isAnimationActive={false}
                     >
                       {data.statusDist.map(
                         (_, index) => (
@@ -791,7 +809,7 @@ export default function AnalyticsPage() {
           </CardDescription>
         </CardHeader>
 
-        <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
+        <CardContent className="min-w-0 p-4 pt-0 sm:p-6 sm:pt-0">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="rounded-xl border p-4 transition hover:bg-muted/30 sm:p-5">
               <p className="text-sm font-medium text-muted-foreground">

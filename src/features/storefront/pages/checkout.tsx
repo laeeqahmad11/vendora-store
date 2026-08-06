@@ -5,17 +5,27 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { Banknote, CheckCircle2, MapPin, ShoppingBag } from 'lucide-react'
+import {
+  Banknote,
+  CheckCircle2,
+  MapPin,
+  ShoppingBag,
+  Tag,
+  X,
+} from 'lucide-react'
+
 import { Button } from '@/components/ui/button'
 import { Input, Textarea } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { Checkbox, Separator, Spinner } from '@/components/ui/misc'
 import { FormField } from '@/components/shared/form-field'
 import { SEO } from '@/components/shared/seo'
+
 import { usersService } from '@/services/users.service'
 import { storesService } from '@/services/stores.service'
 import { ordersService } from '@/services/orders.service'
 import { discountsService } from '@/services/discounts.service'
+
 import { useAuthStore } from '@/stores/auth-store'
 import {
   useCartStore,
@@ -23,6 +33,7 @@ import {
   getActiveItems,
   getSubtotal,
 } from '@/stores/cart-store'
+
 import { cn, formatCurrency, getErrorMessage } from '@/lib/utils'
 import type { CartItem, Order } from '@/types'
 
@@ -56,13 +67,21 @@ export default function CheckoutPage() {
   const subtotal = React.useMemo(() => getSubtotal(items), [items])
 
   const coupon = useCartStore((state) => state.coupon)
+  const setCoupon = useCartStore((state) => state.setCoupon)
+
   const giftNote = useCartStore((state) => state.giftNote)
   const clearCart = useCartStore((state) => state.clear)
 
-  const [saveAddress, setSaveAddress] = React.useState(false)
-  const [selectedAddressId, setSelectedAddressId] = React.useState<string | null>(
-    null,
+  const [couponCode, setCouponCode] = React.useState(
+    coupon?.coupon.code ?? '',
   )
+
+  const [saveAddress, setSaveAddress] = React.useState(false)
+
+  const [selectedAddressId, setSelectedAddressId] = React.useState<
+    string | null
+  >(null)
+
   const placedRef = React.useRef(false)
 
   React.useEffect(() => {
@@ -80,6 +99,12 @@ export default function CheckoutPage() {
     }
   }, [activeItems.length, navigate])
 
+  React.useEffect(() => {
+    if (coupon?.coupon.code) {
+      setCouponCode(coupon.coupon.code)
+    }
+  }, [coupon?.coupon.code])
+
   const {
     register,
     handleSubmit,
@@ -87,6 +112,7 @@ export default function CheckoutPage() {
     formState: { errors },
   } = useForm<CheckoutValues>({
     resolver: zodResolver(checkoutSchema),
+
     defaultValues: {
       fullName: profile?.displayName ?? '',
       phone: profile?.phone ?? '',
@@ -103,8 +129,10 @@ export default function CheckoutPage() {
 
   const addresses = useQuery({
     queryKey: ['addresses', firebaseUser?.uid],
+
     queryFn: () => usersService.listAddresses(firebaseUser!.uid),
-    enabled: !!firebaseUser,
+
+    enabled: Boolean(firebaseUser),
   })
 
   const applyAddress = (id: string) => {
@@ -132,12 +160,17 @@ export default function CheckoutPage() {
     const map = new Map<string, CartItem[]>()
 
     for (const item of activeItems) {
-      map.set(item.storeId, [...(map.get(item.storeId) ?? []), item])
+      map.set(item.storeId, [
+        ...(map.get(item.storeId) ?? []),
+        item,
+      ])
     }
 
     return [...map.entries()].map(([storeId, groupedItems]) => ({
       storeId,
+
       items: groupedItems,
+
       subtotal: groupedItems.reduce(
         (sum, item) => sum + item.price * item.quantity,
         0,
@@ -145,58 +178,190 @@ export default function CheckoutPage() {
     }))
   }, [activeItems])
 
-  const storeIds = groups.map((group) => group.storeId)
+  const storeIds = React.useMemo(
+    () => groups.map((group) => group.storeId),
+    [groups],
+  )
 
   const stores = useQuery({
     queryKey: ['checkout-stores', storeIds],
+
     queryFn: async () =>
-      Promise.all(storeIds.map((id) => storesService.getById(id))),
+      Promise.all(
+        storeIds.map((id) => storesService.getById(id)),
+      ),
+
     enabled: storeIds.length > 0,
   })
 
-  const discountFor = (group: StoreGroup): number => {
-    if (!coupon) return 0
+  const discountFor = React.useCallback(
+    (group: StoreGroup): number => {
+      if (!coupon) return 0
 
-    const couponStoreId = coupon.coupon.storeId
+      const couponStoreId = coupon.coupon.storeId
 
-    if (couponStoreId) {
-      return couponStoreId === group.storeId
-        ? Math.min(coupon.discount, group.subtotal)
-        : 0
-    }
+      if (couponStoreId) {
+        return couponStoreId === group.storeId
+          ? Math.min(coupon.discount, group.subtotal)
+          : 0
+      }
 
-    const eligibleTotal = groups.reduce(
-      (sum, currentGroup) => sum + currentGroup.subtotal,
-      0,
-    )
+      const eligibleTotal = groups.reduce(
+        (sum, currentGroup) =>
+          sum + currentGroup.subtotal,
+        0,
+      )
 
-    if (!eligibleTotal) return 0
+      if (!eligibleTotal) return 0
 
-    return (
-      Math.round(
-        ((coupon.discount * group.subtotal) / eligibleTotal) * 100,
-      ) / 100
-    )
-  }
-
-  const totalDiscount = groups.reduce(
-    (sum, group) => sum + discountFor(group),
-    0,
+      return (
+        Math.round(
+          ((coupon.discount * group.subtotal) /
+            eligibleTotal) *
+            100,
+        ) / 100
+      )
+    },
+    [coupon, groups],
   )
 
-  const total = Math.max(0, subtotal - totalDiscount)
+  const totalDiscount = React.useMemo(
+    () =>
+      groups.reduce(
+        (sum, group) => sum + discountFor(group),
+        0,
+      ),
+    [groups, discountFor],
+  )
+
+  const shippingFor = React.useCallback(
+    (group: StoreGroup): number => {
+      const store = stores.data?.find(
+        (storeItem) => storeItem?.id === group.storeId,
+      )
+
+      if (!store || store.shippingEnabled === false) {
+        return 0
+      }
+
+      const shippingFee = Math.max(0, store.shippingFee ?? 0)
+      const freeShippingThreshold = Math.max(
+        0,
+        store.freeShippingThreshold ?? 0,
+      )
+
+      if (
+        freeShippingThreshold > 0 &&
+        group.subtotal >= freeShippingThreshold
+      ) {
+        return 0
+      }
+
+      return shippingFee
+    },
+    [stores.data],
+  )
+
+  const totalShipping = React.useMemo(
+    () =>
+      groups.reduce(
+        (sum, group) => sum + shippingFor(group),
+        0,
+      ),
+    [groups, shippingFor],
+  )
+
+  const total = Math.max(
+    0,
+    subtotal - totalDiscount + totalShipping,
+  )
+
+  const applyCoupon = useMutation({
+    mutationFn: async () => {
+  if (!firebaseUser) {
+    throw new Error('You must be signed in to apply a promo code.')
+  }
+
+  const normalizedCode = couponCode.trim().toUpperCase()
+
+      if (!normalizedCode) {
+        throw new Error('Please enter a promo code.')
+      }
+
+      /*
+       * First try a platform-wide coupon against the complete cart.
+       */
+      try {
+        return await discountsService.validateCoupon(
+          normalizedCode,
+          activeItems,
+          undefined,
+          firebaseUser.uid,
+        )
+      } catch (platformError) {
+        /*
+         * If it is not a platform-wide coupon, try the same code
+         * against each store group. This supports merchant coupons
+         * such as SUMMER5.
+         */
+        let lastError: unknown = platformError
+
+        for (const group of groups) {
+          try {
+            return await discountsService.validateCoupon(
+              normalizedCode,
+              group.items,
+              group.storeId,
+              firebaseUser.uid,
+            )
+          } catch (storeError) {
+            lastError = storeError
+          }
+        }
+
+        throw lastError
+      }
+    },
+
+    onSuccess: (result) => {
+      setCoupon(result)
+      setCouponCode(result.coupon.code)
+
+      toast.success(
+        `Promo code ${result.coupon.code} applied successfully.`,
+      )
+    },
+
+    onError: (error) => {
+      setCoupon(null)
+      toast.error(getErrorMessage(error))
+    },
+  })
+
+  const removeCoupon = () => {
+    setCoupon(null)
+    setCouponCode('')
+
+    toast.success('Promo code removed.')
+  }
 
   const placeOrder = useMutation({
     mutationFn: async (values: CheckoutValues) => {
       if (!firebaseUser) {
-        throw new Error('You must be signed in to place an order.')
+        throw new Error(
+          'You must be signed in to place an order.',
+        )
       }
 
       const shippingAddress = {
         fullName: values.fullName,
         phone: values.phone,
         line1: values.line1,
-        ...(values.line2 ? { line2: values.line2 } : {}),
+
+        ...(values.line2
+          ? { line2: values.line2 }
+          : {}),
+
         city: values.city,
         province: values.province,
         postalCode: values.postalCode,
@@ -214,53 +379,87 @@ export default function CheckoutPage() {
         | 'updatedAt'
       >[] = groups.map((group) => {
         const store = stores.data?.find(
-          (storeItem) => storeItem?.id === group.storeId,
+          (storeItem) =>
+            storeItem?.id === group.storeId,
         )
 
         const discount = discountFor(group)
+        const shippingFee = shippingFor(group)
 
         return {
           customerId: firebaseUser.uid,
           customerName: values.fullName,
           customerEmail: values.email,
           customerPhone: values.phone,
+
           storeId: group.storeId,
           merchantId: store?.ownerId ?? '',
-          storeName: store?.name ?? group.items[0]?.storeName ?? 'Store',
+
+          storeName:
+            store?.name ??
+            group.items[0]?.storeName ??
+            'Store',
+
           items: group.items.map((item) => ({
             productId: item.productId,
             name: item.name,
             imageUrl: item.imageUrl,
             price: item.price,
             quantity: item.quantity,
-            ...(item.variant ? { variant: item.variant } : {}),
-            ...(item.variantId ? { variantId: item.variantId } : {}),
+
+            ...(item.variant
+              ? { variant: item.variant }
+              : {}),
+
+            ...(item.variantId
+              ? { variantId: item.variantId }
+              : {}),
           })),
+
           subtotal: group.subtotal,
           discount,
+
           ...(discount > 0 && coupon?.coupon.code
             ? { couponCode: coupon.coupon.code }
             : {}),
-          shippingFee: 0,
+
+          shippingFee,
           tax: 0,
-          total: Math.max(0, group.subtotal - discount),
+
+          total: Math.max(
+            0,
+            group.subtotal - discount + shippingFee,
+          ),
+
           paymentMethod: 'cod' as const,
           shippingAddress,
+
           ...(values.specialInstructions
-            ? { specialInstructions: values.specialInstructions }
+            ? {
+                specialInstructions:
+                  values.specialInstructions,
+              }
             : {}),
+
           ...(giftNote ? { giftNote } : {}),
         }
       })
 
-      const ids = await ordersService.placeOrders(orders, {
-        id: firebaseUser.uid,
-        name: values.fullName,
-        role: 'customer',
-      })
+      const ids = await ordersService.placeOrders(
+        orders,
+        {
+          id: firebaseUser.uid,
+          name: values.fullName,
+          role: 'customer',
+        },
+      )
 
       if (coupon && totalDiscount > 0) {
-        await discountsService.consumeCoupon(coupon.coupon.id)
+        await discountsService.consumeCoupon(
+          coupon.coupon,
+          firebaseUser.uid,
+          ids,
+        )
       }
 
       if (saveAddress) {
@@ -282,11 +481,15 @@ export default function CheckoutPage() {
       placedRef.current = true
 
       const created = await Promise.all(
-        ids.map((id) => ordersService.getById(id).catch(() => null)),
+        ids.map((id) =>
+          ordersService.getById(id).catch(() => null),
+        ),
       )
 
       const orderNumbers = created
-        .filter((order): order is Order => Boolean(order))
+        .filter(
+          (order): order is Order => Boolean(order),
+        )
         .map((order) => order.orderNumber)
 
       clearCart()
@@ -296,11 +499,14 @@ export default function CheckoutPage() {
           orderIds: ids,
           orderNumbers,
         },
+
         replace: true,
       })
     },
 
-    onError: (error) => toast.error(getErrorMessage(error)),
+    onError: (error) => {
+      toast.error(getErrorMessage(error))
+    },
   })
 
   if (
@@ -321,7 +527,9 @@ export default function CheckoutPage() {
 
       <form
         className="mt-6 grid min-w-0 gap-6 lg:grid-cols-3 lg:gap-8"
-        onSubmit={handleSubmit((values) => placeOrder.mutate(values))}
+        onSubmit={handleSubmit((values) =>
+          placeOrder.mutate(values),
+        )}
       >
         <div className="min-w-0 space-y-6 lg:col-span-2">
           {(addresses.data?.length ?? 0) > 0 && (
@@ -336,7 +544,9 @@ export default function CheckoutPage() {
                   <button
                     key={address.id}
                     type="button"
-                    onClick={() => applyAddress(address.id)}
+                    onClick={() =>
+                      applyAddress(address.id)
+                    }
                     className={cn(
                       'min-w-0 rounded-xl border p-4 text-left text-sm transition-colors hover:border-primary/50',
                       selectedAddressId === address.id &&
@@ -344,19 +554,25 @@ export default function CheckoutPage() {
                     )}
                   >
                     <p className="flex items-center justify-between gap-3 font-medium">
-                      <span className="min-w-0 truncate">{address.label}</span>
+                      <span className="min-w-0 truncate">
+                        {address.label}
+                      </span>
 
-                      {selectedAddressId === address.id && (
+                      {selectedAddressId ===
+                        address.id && (
                         <CheckCircle2 className="size-4 shrink-0 text-primary" />
                       )}
                     </p>
 
                     <p className="mt-1 break-words text-muted-foreground">
-                      {address.fullName} · {address.phone}
+                      {address.fullName} ·{' '}
+                      {address.phone}
                     </p>
 
                     <p className="mt-0.5 break-words text-muted-foreground">
-                      {address.line1}, {address.city}, {address.province}
+                      {address.line1},{' '}
+                      {address.city},{' '}
+                      {address.province}
                     </p>
                   </button>
                 ))}
@@ -365,7 +581,9 @@ export default function CheckoutPage() {
           )}
 
           <Card className="p-4 sm:p-6">
-            <h2 className="font-semibold">Delivery details</h2>
+            <h2 className="font-semibold">
+              Delivery details
+            </h2>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <FormField
@@ -373,7 +591,10 @@ export default function CheckoutPage() {
                 required
                 error={errors.fullName?.message}
               >
-                <Input {...register('fullName')} autoComplete="name" />
+                <Input
+                  {...register('fullName')}
+                  autoComplete="name"
+                />
               </FormField>
 
               <FormField
@@ -381,7 +602,11 @@ export default function CheckoutPage() {
                 required
                 error={errors.phone?.message}
               >
-                <Input {...register('phone')} type="tel" autoComplete="tel" />
+                <Input
+                  {...register('phone')}
+                  type="tel"
+                  autoComplete="tel"
+                />
               </FormField>
 
               <FormField
@@ -468,11 +693,15 @@ export default function CheckoutPage() {
 
               <FormField
                 label="Special instructions"
-                error={errors.specialInstructions?.message}
+                error={
+                  errors.specialInstructions?.message
+                }
                 className="sm:col-span-2"
               >
                 <Textarea
-                  {...register('specialInstructions')}
+                  {...register(
+                    'specialInstructions',
+                  )}
                   rows={4}
                   placeholder="Delivery notes for the courier (optional)"
                   className="resize-y"
@@ -484,16 +713,22 @@ export default function CheckoutPage() {
               <Checkbox
                 checked={saveAddress}
                 onCheckedChange={(checked) =>
-                  setSaveAddress(checked === true)
+                  setSaveAddress(
+                    checked === true,
+                  )
                 }
               />
 
-              <span className="pt-0.5">Save this address for next time</span>
+              <span className="pt-0.5">
+                Save this address for next time
+              </span>
             </label>
           </Card>
 
           <Card className="p-4 sm:p-6">
-            <h2 className="font-semibold">Payment method</h2>
+            <h2 className="font-semibold">
+              Payment method
+            </h2>
 
             <div className="mt-4 flex min-w-0 items-center gap-3 rounded-xl border-2 border-primary bg-primary/5 p-3 sm:gap-4 sm:p-4">
               <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/15 sm:size-11">
@@ -501,10 +736,13 @@ export default function CheckoutPage() {
               </div>
 
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold">Cash on Delivery</p>
+                <p className="text-sm font-semibold">
+                  Cash on Delivery
+                </p>
 
                 <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                  Pay in cash when your order arrives at your door.
+                  Pay in cash when your order
+                  arrives at your door.
                 </p>
               </div>
 
@@ -526,56 +764,99 @@ export default function CheckoutPage() {
             <div className="mt-5 space-y-6">
               {groups.map((group) => {
                 const store = stores.data?.find(
-                  (storeItem) => storeItem?.id === group.storeId,
+                  (storeItem) =>
+                    storeItem?.id ===
+                    group.storeId,
                 )
 
-                const discount = discountFor(group)
+                const discount =
+                  discountFor(group)
+
+                const shippingFee =
+                  shippingFor(group)
 
                 return (
-                  <div key={group.storeId} className="min-w-0">
+                  <div
+                    key={group.storeId}
+                    className="min-w-0"
+                  >
                     <p className="truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      {store?.name ?? group.items[0]?.storeName ?? 'Store'}
+                      {store?.name ??
+                        group.items[0]
+                          ?.storeName ??
+                        'Store'}
                     </p>
 
                     <ul className="mt-2 space-y-2">
-                      {group.items.map((item) => (
-                        <li
-                          key={`${item.productId}-${item.variantId ?? ''}`}
-                          className="flex min-w-0 items-start justify-between gap-3 text-sm"
-                        >
-                          <span className="min-w-0 flex-1">
-                            <span className="line-clamp-2 break-words">
-                              {item.name}
+                      {group.items.map(
+                        (item) => (
+                          <li
+                            key={`${item.productId}-${item.variantId ?? ''}`}
+                            className="flex min-w-0 items-start justify-between gap-3 text-sm"
+                          >
+                            <span className="min-w-0 flex-1">
+                              <span className="line-clamp-2 break-words">
+                                {item.name}
+                              </span>
+
+                              <span className="text-xs text-muted-foreground">
+                                × {item.quantity}
+                              </span>
                             </span>
 
-                            <span className="text-xs text-muted-foreground">
-                              × {item.quantity}
+                            <span className="shrink-0 whitespace-nowrap font-medium">
+                              {formatCurrency(
+                                item.price *
+                                  item.quantity,
+                              )}
                             </span>
-                          </span>
-
-                          <span className="shrink-0 whitespace-nowrap font-medium">
-                            {formatCurrency(item.price * item.quantity)}
-                          </span>
-                        </li>
-                      ))}
+                          </li>
+                        ),
+                      )}
                     </ul>
 
                     <div className="mt-2 flex items-start justify-between gap-4 text-xs text-muted-foreground">
-                      <span>Store subtotal</span>
+                      <span>
+                        Store subtotal
+                      </span>
 
                       <span className="shrink-0 whitespace-nowrap">
-                        {formatCurrency(group.subtotal)}
+                        {formatCurrency(
+                          group.subtotal,
+                        )}
                       </span>
                     </div>
 
                     {discount > 0 && (
                       <div className="mt-1 flex items-start justify-between gap-4 text-xs text-success">
-                        <span>Discount</span>
+                        <span>
+                          Discount
+                        </span>
 
                         <span className="shrink-0 whitespace-nowrap">
-                          −{formatCurrency(discount)}
+                          −
+                          {formatCurrency(
+                            discount,
+                          )}
                         </span>
                       </div>
+                    )}
+
+                    <div className="mt-1 flex items-start justify-between gap-4 text-xs text-muted-foreground">
+                      <span>Shipping</span>
+
+                      <span className="shrink-0 whitespace-nowrap font-medium">
+                        {shippingFee > 0
+                          ? formatCurrency(shippingFee)
+                          : 'Free'}
+                      </span>
+                    </div>
+
+                    {store?.estimatedDeliveryDays && (
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        Estimated delivery:{' '}
+                        {store.estimatedDeliveryDays}
+                      </p>
                     )}
                   </div>
                 )
@@ -584,9 +865,90 @@ export default function CheckoutPage() {
 
             <Separator className="my-4" />
 
+            {/* Coupon area */}
+            <div>
+              <p className="flex items-center gap-2 text-sm font-semibold">
+                <Tag className="size-4 text-primary" />
+                Promo code
+              </p>
+
+              {coupon ? (
+                <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-success/30 bg-success/5 p-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-success">
+                      {coupon.coupon.code}
+                    </p>
+
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      You saved{' '}
+                      {formatCurrency(
+                        totalDiscount,
+                      )}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={removeCoupon}
+                    className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-background hover:text-destructive"
+                    aria-label="Remove promo code"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-3 flex min-w-0 gap-2">
+                  <Input
+                    value={couponCode}
+                    onChange={(event) =>
+                      setCouponCode(
+                        event.target.value.toUpperCase(),
+                      )
+                    }
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === 'Enter'
+                      ) {
+                        event.preventDefault()
+                        applyCoupon.mutate()
+                      }
+                    }}
+                    placeholder="Enter promo code"
+                    autoComplete="off"
+                    disabled={
+                      applyCoupon.isPending
+                    }
+                    className="min-w-0 uppercase"
+                  />
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      applyCoupon.mutate()
+                    }
+                    loading={
+                      applyCoupon.isPending
+                    }
+                    disabled={
+                      !couponCode.trim() ||
+                      applyCoupon.isPending
+                    }
+                    className="shrink-0"
+                  >
+                    Apply
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <Separator className="my-4" />
+
             <dl className="space-y-3 text-sm">
               <div className="flex items-start justify-between gap-4">
-                <dt className="text-muted-foreground">Subtotal</dt>
+                <dt className="text-muted-foreground">
+                  Subtotal
+                </dt>
 
                 <dd className="shrink-0 whitespace-nowrap font-medium">
                   {formatCurrency(subtotal)}
@@ -596,20 +958,32 @@ export default function CheckoutPage() {
               {totalDiscount > 0 && (
                 <div className="flex items-start justify-between gap-4 text-success">
                   <dt className="min-w-0 break-words">
-                    Discount {coupon ? `(${coupon.coupon.code})` : ''}
+                    Discount{' '}
+                    {coupon
+                      ? `(${coupon.coupon.code})`
+                      : ''}
                   </dt>
 
                   <dd className="shrink-0 whitespace-nowrap font-medium">
-                    −{formatCurrency(totalDiscount)}
+                    −
+                    {formatCurrency(
+                      totalDiscount,
+                    )}
                   </dd>
                 </div>
               )}
 
               <div className="flex items-start justify-between gap-4">
-                <dt className="shrink-0 text-muted-foreground">Shipping</dt>
+                <dt className="shrink-0 text-muted-foreground">
+                  Shipping
+                </dt>
 
-                <dd className="max-w-[60%] text-right text-xs leading-5 text-muted-foreground">
-                  Calculated at delivery
+                <dd className="shrink-0 whitespace-nowrap font-medium">
+                  {stores.isLoading
+                    ? 'Calculating…'
+                    : totalShipping > 0
+                      ? formatCurrency(totalShipping)
+                      : 'Free'}
                 </dd>
               </div>
             </dl>
@@ -626,8 +1000,16 @@ export default function CheckoutPage() {
 
             {groups.length > 1 && (
               <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                Your items come from {groups.length} stores — we&apos;ll place{' '}
-                {groups.length} separate orders.
+                Your items come from{' '}
+                {groups.length} stores — we&apos;ll
+                place {groups.length} separate
+                orders.
+              </p>
+            )}
+
+            {stores.isError && (
+              <p className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs leading-5 text-destructive">
+                Shipping settings could not be loaded. Please refresh the page and try again.
               </p>
             )}
 
@@ -636,12 +1018,19 @@ export default function CheckoutPage() {
               size="lg"
               className="mt-6 h-12 w-full"
               loading={placeOrder.isPending}
+              disabled={
+                placeOrder.isPending ||
+                applyCoupon.isPending ||
+                stores.isLoading ||
+                stores.isError
+              }
             >
               Place order
             </Button>
 
             <p className="mt-3 text-center text-xs leading-5 text-muted-foreground">
-              By placing this order you agree to our{' '}
+              By placing this order you agree to
+              our{' '}
               <Link
                 to="/pages/terms"
                 className="underline underline-offset-2 hover:text-foreground"

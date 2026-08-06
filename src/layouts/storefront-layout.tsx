@@ -291,21 +291,79 @@ function SearchBar({
 }: {
   className?: string
 }) {
-  const [term, setTerm] = React.useState('')
+  const location = useLocation()
   const navigate = useNavigate()
+  const hasInteractedRef = React.useRef(false)
+
+  const currentQuery = React.useMemo(() => {
+    if (location.pathname !== '/shop') return ''
+
+    return (
+      new URLSearchParams(location.search).get('q') ?? ''
+    )
+  }, [location.pathname, location.search])
+
+  const [term, setTerm] = React.useState(currentQuery)
+
+  React.useEffect(() => {
+    setTerm(currentQuery)
+  }, [currentQuery])
+
+  const navigateToSearch = React.useCallback(
+    (
+      value: string,
+      options?: {
+        replace?: boolean
+      },
+    ) => {
+      const normalizedTerm = value.trim()
+      const params = new URLSearchParams()
+
+      if (normalizedTerm) {
+        params.set('q', normalizedTerm)
+      }
+
+      const nextSearch = params.toString()
+      const nextUrl = nextSearch
+        ? `/shop?${nextSearch}`
+        : '/shop'
+
+      const currentUrl = `${location.pathname}${location.search}`
+
+      if (currentUrl === nextUrl) return
+
+      navigate(nextUrl, {
+        replace: options?.replace ?? false,
+      })
+    },
+    [location.pathname, location.search, navigate],
+  )
+
+  React.useEffect(() => {
+    if (!hasInteractedRef.current) return
+
+    const timer = window.setTimeout(() => {
+      navigateToSearch(term, { replace: true })
+    }, 350)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [term, navigateToSearch])
 
   const handleSubmit = (
     event: React.FormEvent<HTMLFormElement>,
   ) => {
     event.preventDefault()
+    hasInteractedRef.current = true
+    navigateToSearch(term)
+  }
 
-    const normalizedTerm = term.trim()
-
-    if (!normalizedTerm) return
-
-    navigate(
-      `/shop?q=${encodeURIComponent(normalizedTerm)}`,
-    )
+  const handleChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    hasInteractedRef.current = true
+    setTerm(event.target.value)
   }
 
   return (
@@ -315,17 +373,17 @@ function SearchBar({
         className,
       )}
       onSubmit={handleSubmit}
+      role="search"
     >
       <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 
       <Input
         value={term}
-        onChange={(event) =>
-          setTerm(event.target.value)
-        }
+        onChange={handleChange}
         placeholder="Search products, brands..."
         className="h-10 w-full min-w-0 rounded-full border-transparent bg-muted/60 pl-9 pr-3 focus-visible:bg-background"
         aria-label="Search products"
+        autoComplete="off"
       />
     </form>
   )

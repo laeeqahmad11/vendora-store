@@ -8,16 +8,28 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function storePath(storeId) {
+      return /databases/$(database)/documents/stores/$(storeId);
+    }
+
+    function currentUserExists() {
+      return signedIn() && exists(userPath(request.auth.uid));
+    }
+
     function userDoc() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return get(userPath(request.auth.uid)).data;
     }
 
     function isAdmin() {
-      return signedIn() && userDoc().role == 'admin';
+      return currentUserExists() && userDoc().role == 'admin';
     }
 
     function isMerchant() {
-      return signedIn() && userDoc().role == 'merchant';
+      return currentUserExists() && userDoc().role == 'merchant';
     }
 
     function isSelf(uid) {
@@ -26,75 +38,155 @@ service cloud.firestore {
 
     function ownsStore(storeId) {
       return signedIn()
-        && get(/databases/$(database)/documents/stores/$(storeId)).data.ownerId == request.auth.uid;
+        && storeId is string
+        && exists(storePath(storeId))
+        && get(storePath(storeId)).data.ownerId == request.auth.uid;
+    }
+
+    function validOrderStatus(status) {
+      return status in [
+        'pending', 'confirmed', 'packed', 'ready', 'dispatched',
+        'delivered', 'completed', 'cancelled', 'returned', 'refund_requested'
+      ];
+    }
+
+    function validSupportStatus(status) {
+      return status in ['open', 'in_progress', 'resolved', 'closed'];
+    }
+
+    function validSupportPriority(priority) {
+      return priority in ['low', 'medium', 'high'];
+    }
+
+    function validNotificationType(type) {
+      return type in [
+        'order_update', 'approval', 'review', 'discount', 'announcement',
+        'low_stock', 'message', 'support'
+      ];
     }
 
     // -------------------------------------------------------------- users
     match /users/{uid} {
       allow read: if isSelf(uid) || isAdmin();
-      // Users may create their own profile but never grant themselves a role
+
       allow create: if isSelf(uid)
         && request.resource.data.role == 'customer'
-        && request.resource.data.suspended == false;
-      // Users can edit their own profile but cannot change role/suspended/storeId
-      allow update: if (isSelf(uid)
-          && request.resource.data.role == resource.data.role
-          && request.resource.data.suspended == resource.data.suspended)
-        || isAdmin();
+        && (!request.resource.data.keys().hasAny(['suspended'])
+            || request.resource.data.suspended == false)
+        && !request.resource.data.keys().hasAny(['storeId']);
+
+      // Self-service updates are limited to normal profile fields.
+      // role, suspended, storeId and createdAt are platform-managed.
+      allow update: if isAdmin()
+        || (isSelf(uid)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'displayName', 'photoURL', 'phone', 'email',
+              'emailVerified', 'updatedAt'
+            ])
+            && (!request.resource.data.keys().hasAny(['email'])
+                || request.resource.data.email == request.auth.token.email));
+
       allow delete: if isAdmin();
 
       match /addresses/{addressId} {
-        allow read, write: if isSelf(uid);
+        allow read, create, update, delete: if isSelf(uid);
       }
     }
 
     // ------------------------------------------------------------- stores
     match /stores/{storeId} {
-      // Public storefront needs approved stores; owners/admin see their own
       allow read: if true;
-      // Any signed-in user may apply — but only as a pending store they own
+
       allow create: if signedIn()
         && request.resource.data.ownerId == request.auth.uid
-        && request.resource.data.status == 'pending';
-      // Owner may edit profile fields but not self-approve or self-verify
-      allow update: if (signedIn()
-          && resource.data.ownerId == request.auth.uid
-          && request.resource.data.status == resource.data.status
-          || (signedIn()
-              && resource.data.ownerId == request.auth.uid
-              && resource.data.status == 'rejected'
-              && request.resource.data.status == 'pending'))
-        || isAdmin();
+        && request.resource.data.status == 'pending'
+        && request.resource.data.verified != true;
+
+      // Owners can edit store profile/shipping fields only.
+      // Admin controls ownerId, approval, verification and counters.
+      allow update: if isAdmin()
+        || (ownsStore(storeId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'name', 'slug', 'description', 'logoUrl', 'bannerUrl',
+              'email', 'phone', 'address', 'businessName',
+              'businessDocumentUrl', 'socialLinks', 'seo', 'businessHours',
+              'shippingPolicy', 'shippingEnabled', 'shippingFee',
+              'freeShippingThreshold', 'estimatedDeliveryDays', 'updatedAt'
+            ]))
+        || (ownsStore(storeId)
+            && resource.data.status == 'rejected'
+            && request.resource.data.status == 'pending'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'rejectionReason', 'businessName',
+              'businessDocumentUrl', 'updatedAt'
+            ]));
+
       allow delete: if isAdmin();
     }
 
     // ----------------------------------------------------------- products
     match /products/{productId} {
-      // Approved products are public; merchants see their own store's; admin sees all
       allow read: if resource.data.status == 'approved'
         || isAdmin()
         || (signedIn() && resource.data.merchantId == request.auth.uid)
         || (signedIn() && ownsStore(resource.data.storeId));
-      // Merchants create products for their own approved store, never pre-approved
+
       allow create: if isMerchant()
         && request.resource.data.merchantId == request.auth.uid
         && ownsStore(request.resource.data.storeId)
-        && request.resource.data.status in ['draft', 'pending'];
-      // Merchant may edit own product but cannot set status to approved.
-      // Signed-in users may bump counters (view/sold/stock/rating) — kept
-      // permissive for the COD flow; tighten with Cloud Functions in prod.
+        && request.resource.data.status in ['draft', 'pending']
+        && request.resource.data.rating == 0
+        && request.resource.data.ratingCount == 0
+        && request.resource.data.soldCount == 0
+        && request.resource.data.viewCount == 0;
+
       allow update: if isAdmin()
-        || (signedIn()
+
+        // Merchant edits own product without changing ownership.
+        || (isMerchant()
             && resource.data.merchantId == request.auth.uid
-            && request.resource.data.status != 'approved')
-        || (signedIn()
-            && resource.data.merchantId == request.auth.uid
-            && resource.data.status == 'approved'
-            && request.resource.data.status == 'approved')
+            && request.resource.data.merchantId == resource.data.merchantId
+            && request.resource.data.storeId == resource.data.storeId
+            && request.resource.data.createdAt == resource.data.createdAt
+            && (request.resource.data.status != 'approved'
+                || resource.data.status == 'approved'))
+
+        // Current client-side view counter.
         || (signedIn()
             && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['viewCount', 'soldCount', 'stock', 'rating', 'ratingCount', 'updatedAt']));
-      allow delete: if isAdmin() || (signedIn() && resource.data.merchantId == request.auth.uid);
+                 .hasOnly(['viewCount', 'updatedAt'])
+            && request.resource.data.viewCount == resource.data.viewCount + 1)
+
+        // Current COD checkout: stock decreases and soldCount increases equally.
+        || (signedIn()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['stock', 'soldCount', 'updatedAt'])
+            && request.resource.data.stock >= 0
+            && request.resource.data.stock < resource.data.stock
+            && request.resource.data.soldCount > resource.data.soldCount
+            && resource.data.stock - request.resource.data.stock
+               == request.resource.data.soldCount - resource.data.soldCount)
+
+        // Current cancellation flow: stock is restored and soldCount reduced.
+        || (signedIn()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['stock', 'soldCount', 'updatedAt'])
+            && request.resource.data.stock > resource.data.stock
+            && request.resource.data.soldCount >= 0
+            && request.resource.data.soldCount < resource.data.soldCount
+            && request.resource.data.stock - resource.data.stock
+               == resource.data.soldCount - request.resource.data.soldCount)
+
+        // Current client-side review aggregate update.
+        || (signedIn()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['rating', 'ratingCount', 'updatedAt'])
+            && request.resource.data.rating >= 0
+            && request.resource.data.rating <= 5
+            && request.resource.data.ratingCount >= resource.data.ratingCount);
+
+      allow delete: if isAdmin()
+        || (isMerchant() && resource.data.merchantId == request.auth.uid);
     }
 
     // ------------------------------------------------------------- orders
@@ -103,20 +195,53 @@ service cloud.firestore {
         || (signedIn() && resource.data.customerId == request.auth.uid)
         || (signedIn() && resource.data.merchantId == request.auth.uid)
         || (signedIn() && ownsStore(resource.data.storeId));
-      // Customers place their own COD orders
+
       allow create: if signedIn()
         && request.resource.data.customerId == request.auth.uid
         && request.resource.data.paymentMethod == 'cod'
         && request.resource.data.status == 'pending'
-        && request.resource.data.cashReceived == false;
-      // Merchant drives fulfilment; customer may cancel/request return.
-      // Only the order's merchant can confirm cash received.
-      allow update: if (signedIn() && resource.data.merchantId == request.auth.uid)
+        && request.resource.data.cashReceived == false
+        && request.resource.data.items is list
+        && request.resource.data.items.size() > 0
+        && request.resource.data.subtotal >= 0
+        && request.resource.data.discount >= 0
+        && request.resource.data.shippingFee >= 0
+        && request.resource.data.tax >= 0
+        && request.resource.data.total >= 0;
+
+      allow update: if
+        // Merchant fulfilment and cash confirmation fields only.
+        (signedIn()
+          && resource.data.merchantId == request.auth.uid
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.merchantId == resource.data.merchantId
+          && request.resource.data.storeId == resource.data.storeId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'cashReceived', 'cashReceivedAt', 'timeline',
+            'cancelReason', 'returnReason', 'updatedAt'
+          ])
+          && validOrderStatus(request.resource.data.status))
+
+        // Customer cancellation/return request only.
         || (signedIn()
-            && resource.data.customerId == request.auth.uid
-            && request.resource.data.cashReceived == resource.data.cashReceived
-            && request.resource.data.status in ['cancelled', 'refund_requested'])
-        || (isAdmin() && request.resource.data.cashReceived == resource.data.cashReceived);
+          && resource.data.customerId == request.auth.uid
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.merchantId == resource.data.merchantId
+          && request.resource.data.storeId == resource.data.storeId
+          && request.resource.data.cashReceived == resource.data.cashReceived
+          && request.resource.data.status in ['cancelled', 'refund_requested']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'timeline', 'cancelReason', 'returnReason', 'updatedAt'
+          ]))
+
+        // Admin lifecycle moderation without changing financial/order content.
+        || (isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'timeline', 'cancelReason', 'returnReason', 'updatedAt'
+          ])
+          && validOrderStatus(request.resource.data.status));
+
       allow delete: if false;
     }
 
@@ -157,9 +282,14 @@ service cloud.firestore {
       allow read: if true; // codes validated client-side at checkout
       allow create: if isAdmin() || (isMerchant() && ownsStore(request.resource.data.storeId));
       allow update: if isAdmin()
-        || (isMerchant() && resource.data.storeId is string && ownsStore(resource.data.storeId))
+        || (isMerchant()
+            && resource.data.storeId is string
+            && ownsStore(resource.data.storeId)
+            && request.resource.data.storeId == resource.data.storeId)
         || (signedIn()
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedCount', 'updatedAt']));
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['usedCount', 'updatedAt'])
+            && request.resource.data.usedCount == resource.data.usedCount + 1);
       allow delete: if isAdmin()
         || (isMerchant() && resource.data.storeId is string && ownsStore(resource.data.storeId));
     }
@@ -170,11 +300,49 @@ service cloud.firestore {
         || (isMerchant() && resource.data.storeId is string && ownsStore(resource.data.storeId));
     }
 
+
+    // ---------------------------------------------------- coupon usages
+    match /couponUsages/{usageId} {
+      // Admins can read every usage record.
+      // Customers can read only their own coupon usage.
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.customerId == request.auth.uid
+        );
+
+      // Customers can create only their own usage records.
+      allow create: if signedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.couponId is string
+        && request.resource.data.couponCode is string
+        && request.resource.data.orderIds is list;
+
+      // Usage history is immutable from the client.
+      allow update, delete: if false;
+    }
+
     // -------------------------------------------------------- notifications
     match /notifications/{id} {
       allow read: if signedIn() && resource.data.userId == request.auth.uid;
-      allow create: if signedIn(); // cross-user notifications (order events etc.)
-      allow update: if signedIn() && resource.data.userId == request.auth.uid;
+
+      // Current order/support services create cross-user notifications client-side.
+      // Validate the payload while keeping that workflow functional.
+      allow create: if signedIn()
+        && request.resource.data.userId is string
+        && request.resource.data.type is string
+        && request.resource.data.title is string
+        && request.resource.data.body is string
+        && request.resource.data.read == false
+        && validNotificationType(request.resource.data.type);
+
+      // Recipient can only change read state.
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['read', 'updatedAt']);
+
       allow delete: if signedIn() && resource.data.userId == request.auth.uid;
     }
 
@@ -202,21 +370,63 @@ service cloud.firestore {
 
     // -------------------------------------------------------------- support
     match /supportTickets/{id} {
-      allow read: if isAdmin() || (signedIn() && resource.data.customerId == request.auth.uid);
-      allow create: if signedIn() && request.resource.data.customerId == request.auth.uid;
-      allow update: if isAdmin() || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+
+      allow create: if signedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == 'open'
+        && validSupportPriority(request.resource.data.priority)
+        && request.resource.data.messages is list
+        && request.resource.data.messages.size() == 1
+        && request.resource.data.messages[0].senderId == request.auth.uid;
+
+      allow update: if
+        // Admin can reply and change status/priority.
+        (isAdmin()
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'priority', 'messages', 'updatedAt'
+          ])
+          && validSupportStatus(request.resource.data.status)
+          && validSupportPriority(request.resource.data.priority))
+
+        // Customer can append exactly one message and cannot change metadata.
+        || (signedIn()
+          && resource.data.customerId == request.auth.uid
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.priority == resource.data.priority
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['messages', 'updatedAt'])
+          && request.resource.data.messages is list
+          && request.resource.data.messages.size()
+             == resource.data.messages.size() + 1
+          && request.resource.data.messages[
+               request.resource.data.messages.size() - 1
+             ].senderId == request.auth.uid);
+
       allow delete: if isAdmin();
     }
 
     // ------------------------------------------------------------- logging
     match /activityLogs/{id} {
       allow read: if isAdmin();
-      allow create: if signedIn();
+      allow create: if signedIn()
+        && currentUserExists()
+        && request.resource.data.actorId == request.auth.uid
+        && request.resource.data.actorRole == userDoc().role;
       allow update, delete: if false;
     }
+
     match /inventoryLogs/{id} {
-      allow read: if isAdmin() || (signedIn() && ownsStore(resource.data.storeId));
-      allow create: if signedIn();
+      allow read: if isAdmin()
+        || (signedIn() && ownsStore(resource.data.storeId));
+      allow create: if signedIn()
+        && (isAdmin() || ownsStore(request.resource.data.storeId))
+        && request.resource.data.by == request.auth.uid;
       allow update, delete: if false;
     }
 

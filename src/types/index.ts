@@ -63,6 +63,10 @@ export interface Store {
   seo?: { title?: string; description?: string }
   businessHours?: string
   shippingPolicy?: string
+  shippingEnabled?: boolean
+  shippingFee?: number
+  freeShippingThreshold?: number
+  estimatedDeliveryDays?: string
   createdAt: number
   updatedAt: number
 }

@@ -1,14 +1,13 @@
-import * as React from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query'
-import toast from 'react-hot-toast'
+import * as React from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import toast from "react-hot-toast";
 import {
   Archive,
   ArchiveRestore,
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
   Copy,
   Download,
   MoreHorizontal,
@@ -19,11 +18,12 @@ import {
   Send,
   Trash2,
   Upload,
-} from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input, Textarea } from '@/components/ui/input'
-import { Checkbox, EmptyState } from '@/components/ui/misc'
-import { TableSkeleton } from '@/components/ui/skeleton'
+  X,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input, Textarea } from "@/components/ui/input";
+import { Checkbox, EmptyState } from "@/components/ui/misc";
+import { TableSkeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -31,8 +31,8 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+} from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -40,42 +40,100 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { PageHeader } from '@/layouts/dashboard-layout'
-import { productsService } from '@/services/products.service'
-import {
-  formatCurrency,
-  formatNumber,
-  getErrorMessage,
-} from '@/lib/utils'
-import type { Product, ProductStatus } from '@/types'
+} from "@/components/ui/dropdown-menu";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PageHeader } from "@/layouts/dashboard-layout";
+import { productsService } from "@/services/products.service";
+import { cn, formatCurrency, formatNumber, getErrorMessage } from "@/lib/utils";
+import type { Product, ProductStatus } from "@/types";
 import {
   ErrorState,
   ProductStatusBadge,
   downloadCsv,
   parseCsv,
   useMerchant,
-} from '../components/common'
+} from "../components/common";
 
 const TAB_OPTIONS: {
-  value: ProductStatus | 'all'
-  label: string
+  value: ProductStatus | "all";
+  label: string;
 }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'draft', label: 'Drafts' },
-  { value: 'pending', label: 'Pending' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'rejected', label: 'Rejected' },
-  { value: 'archived', label: 'Archived' },
-]
+  { value: "all", label: "All" },
+  { value: "draft", label: "Drafts" },
+  { value: "pending", label: "Pending" },
+  { value: "approved", label: "Approved" },
+  { value: "rejected", label: "Rejected" },
+  { value: "archived", label: "Archived" },
+];
+
+type ProductTab = ProductStatus | "all";
+
+interface SummaryCardProps {
+  title: string;
+  value: number;
+  description: string;
+  icon: React.ElementType;
+  active: boolean;
+  onClick: () => void;
+  tone?: "default" | "warning";
+}
+
+function SummaryCard({
+  title,
+  value,
+  description,
+  icon: Icon,
+  active,
+  onClick,
+  tone = "default",
+}: SummaryCardProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "group min-w-0 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:p-5",
+        active && "border-primary/45 bg-primary/[0.04] ring-1 ring-primary/20",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm text-muted-foreground">{title}</p>
+
+          <p
+            className={cn(
+              "mt-1 text-2xl font-bold tracking-tight",
+              tone === "warning" && value > 0 && "text-warning",
+            )}
+          >
+            {formatNumber(value)}
+          </p>
+
+          <p className="mt-1 truncate text-xs text-muted-foreground">
+            {description}
+          </p>
+        </div>
+
+        <span
+          className={cn(
+            "flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary transition-transform group-hover:scale-105",
+            tone === "warning" && "bg-warning/10 text-warning",
+          )}
+        >
+          <Icon className="size-5" />
+        </span>
+      </div>
+    </button>
+  );
+}
 
 function ImportDialog({
   open,
@@ -83,22 +141,20 @@ function ImportDialog({
   onImport,
   importing,
 }: {
-  open: boolean
-  onOpenChange: (o: boolean) => void
-  onImport: (text: string) => void
-  importing: boolean
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  onImport: (text: string) => void;
+  importing: boolean;
 }) {
-  const [text, setText] = React.useState('')
+  const [text, setText] = React.useState("");
 
-  const onFile = async (
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = event.target.files?.[0]
+  const onFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
 
-    if (!file) return
+    if (!file) return;
 
-    setText(await file.text())
-  }
+    setText(await file.text());
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -107,7 +163,7 @@ function ImportDialog({
           <DialogTitle>Import products from CSV</DialogTitle>
 
           <DialogDescription className="break-words">
-            Columns:{' '}
+            Columns:{" "}
             <code className="rounded bg-muted px-1">
               name,description,price,stock,categoryId
             </code>
@@ -156,94 +212,125 @@ function ImportDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }
 
 export default function ProductsListPage() {
-  const { store, actor } = useMerchant()
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
+  const { store, actor } = useMerchant();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
-  const [tab, setTab] =
-    React.useState<ProductStatus | 'all'>('all')
-  const [search, setSearch] = React.useState('')
-  const [selected, setSelected] = React.useState<Set<string>>(
-    new Set(),
-  )
-  const [deleteTarget, setDeleteTarget] =
-    React.useState<Product | null>(null)
-  const [bulkDeleteOpen, setBulkDeleteOpen] =
-    React.useState(false)
-  const [importOpen, setImportOpen] = React.useState(false)
+  const [tab, setTab] = React.useState<ProductTab>("all");
+  const [search, setSearch] = React.useState("");
+  const [lowStockOnly, setLowStockOnly] = React.useState(false);
+  const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  const [deleteTarget, setDeleteTarget] = React.useState<Product | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = React.useState(false);
+  const [importOpen, setImportOpen] = React.useState(false);
 
   const productsQ = useQuery({
-    queryKey: ['merchant-products', store.id],
+    queryKey: ["merchant-products", store.id],
     queryFn: () => productsService.listByStore(store.id),
-  })
+  });
 
   const invalidate = () =>
     queryClient.invalidateQueries({
-      queryKey: ['merchant-products', store.id],
-    })
+      queryKey: ["merchant-products", store.id],
+    });
 
-  const products = productsQ.data ?? []
+  const products = productsQ.data ?? [];
+
+  const counts = React.useMemo(() => {
+    const statusCounts = products.reduce(
+      (result, product) => {
+        result[product.status] = (result[product.status] ?? 0) + 1;
+        return result;
+      },
+      {} as Partial<Record<ProductStatus, number>>,
+    );
+
+    const lowStock = products.filter(
+      (product) =>
+        product.stock > 0 && product.stock <= (product.lowStockThreshold ?? 5),
+    ).length;
+
+    return {
+      all: products.length,
+      draft: statusCounts.draft ?? 0,
+      pending: statusCounts.pending ?? 0,
+      approved: statusCounts.approved ?? 0,
+      rejected: statusCounts.rejected ?? 0,
+      archived: statusCounts.archived ?? 0,
+      lowStock,
+    };
+  }, [products]);
 
   const visible = React.useMemo(() => {
     let items =
-      tab === 'all'
+      tab === "all"
         ? products
-        : products.filter((product) => product.status === tab)
+        : products.filter((product) => product.status === tab);
 
-    const q = search.trim().toLowerCase()
+    if (lowStockOnly) {
+      items = items.filter(
+        (product) =>
+          product.stock > 0 &&
+          product.stock <= (product.lowStockThreshold ?? 5),
+      );
+    }
+
+    const q = search.trim().toLowerCase();
 
     if (q) {
       items = items.filter(
         (product) =>
           product.name.toLowerCase().includes(q) ||
           product.sku?.toLowerCase().includes(q),
-      )
+      );
     }
 
-    return items
-  }, [products, tab, search])
+    return items;
+  }, [products, tab, search, lowStockOnly]);
+
+  const clearFilters = () => {
+    setTab("all");
+    setSearch("");
+    setLowStockOnly(false);
+  };
 
   const toggleSelect = (id: string) =>
     setSelected((previous) => {
-      const next = new Set(previous)
+      const next = new Set(previous);
 
       if (next.has(id)) {
-        next.delete(id)
+        next.delete(id);
       } else {
-        next.add(id)
+        next.add(id);
       }
 
-      return next
-    })
+      return next;
+    });
 
   const allVisibleSelected =
-    visible.length > 0 &&
-    visible.every((product) => selected.has(product.id))
+    visible.length > 0 && visible.every((product) => selected.has(product.id));
 
   const toggleSelectAll = () =>
     setSelected(
       allVisibleSelected
         ? new Set()
         : new Set(visible.map((product) => product.id)),
-    )
+    );
 
-  const run = async (
-    fn: () => Promise<unknown>,
-    success: string,
-  ) => {
+  const run = async (fn: () => Promise<unknown>, success: string) => {
     try {
-      await fn()
-      toast.success(success)
-      setSelected(new Set())
-      await invalidate()
+      await fn();
+      toast.success(success);
+      setSelected(new Set());
+      await invalidate();
     } catch (error) {
-      toast.error(getErrorMessage(error))
+      toast.error(getErrorMessage(error));
     }
-  }
+  };
 
   const duplicate = (product: Product) => {
     const {
@@ -258,116 +345,100 @@ export default function ProductsListPage() {
       publishedAt: _publishedAt,
       rejectionReason: _rejectionReason,
       ...rest
-    } = product
+    } = product;
 
     return run(
       () =>
         productsService.create({
           ...rest,
           name: `${product.name} (copy)`,
-          status: 'draft',
+          status: "draft",
           flashSale: null,
           featured: false,
           trending: false,
           recommended: false,
         }),
-      'Product duplicated as draft',
-    )
-  }
+      "Product duplicated as draft",
+    );
+  };
 
   const importMutation = useMutation({
     mutationFn: async (text: string) => {
-      const rows = parseCsv(text)
+      const rows = parseCsv(text);
 
       if (rows.length < 2) {
         throw new Error(
-          'CSV must contain a header row and at least one data row.',
-        )
+          "CSV must contain a header row and at least one data row.",
+        );
       }
 
-      const header = rows[0].map((value) =>
-        value.trim().toLowerCase(),
-      )
+      const header = rows[0].map((value) => value.trim().toLowerCase());
 
-      const idx = (name: string) => header.indexOf(name)
+      const idx = (name: string) => header.indexOf(name);
 
-      for (const column of ['name', 'price']) {
+      for (const column of ["name", "price"]) {
         if (idx(column) === -1) {
-          throw new Error(
-            `Missing required column "${column}".`,
-          )
+          throw new Error(`Missing required column "${column}".`);
         }
       }
 
-      let created = 0
+      let created = 0;
 
       for (const row of rows.slice(1)) {
-        const name = row[idx('name')]?.trim()
+        const name = row[idx("name")]?.trim();
 
-        if (!name) continue
+        if (!name) continue;
 
-        const price = Number(row[idx('price')] ?? 0)
+        const price = Number(row[idx("price")] ?? 0);
 
-        const stock =
-          idx('stock') >= 0
-            ? Number(row[idx('stock')] ?? 0)
-            : 0
+        const stock = idx("stock") >= 0 ? Number(row[idx("stock")] ?? 0) : 0;
 
         await productsService.create({
           storeId: store.id,
           merchantId: actor.id,
           name,
           description:
-            idx('description') >= 0
-              ? (row[idx('description')] ?? '')
-              : '',
+            idx("description") >= 0 ? (row[idx("description")] ?? "") : "",
           images: [],
           price: Number.isFinite(price) ? price : 0,
-          currency: 'USD',
-          stock: Number.isFinite(stock)
-            ? Math.round(stock)
-            : 0,
+          currency: "USD",
+          stock: Number.isFinite(stock) ? Math.round(stock) : 0,
           categoryId:
-            idx('categoryid') >= 0
-              ? (row[idx('categoryid')] ?? '').trim()
-              : '',
+            idx("categoryid") >= 0 ? (row[idx("categoryid")] ?? "").trim() : "",
           tags: [],
-          status: 'draft',
-        })
+          status: "draft",
+        });
 
-        created++
+        created++;
       }
 
-      return created
+      return created;
     },
 
     onSuccess: async (created) => {
       toast.success(
-        `Imported ${created} draft product${
-          created === 1 ? '' : 's'
-        }.`,
-      )
+        `Imported ${created} draft product${created === 1 ? "" : "s"}.`,
+      );
 
-      setImportOpen(false)
-      await invalidate()
+      setImportOpen(false);
+      await invalidate();
     },
 
-    onError: (error) =>
-      toast.error(getErrorMessage(error)),
-  })
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
 
   const exportCsv = () => {
     downloadCsv(
       `products-${store.slug}.csv`,
       [
-        'name',
-        'description',
-        'price',
-        'stock',
-        'categoryId',
-        'sku',
-        'status',
-        'soldCount',
+        "name",
+        "description",
+        "price",
+        "stock",
+        "categoryId",
+        "sku",
+        "status",
+        "soldCount",
       ],
       visible.map((product) => [
         product.name,
@@ -375,43 +446,37 @@ export default function ProductsListPage() {
         product.price,
         product.stock,
         product.categoryId,
-        product.sku ?? '',
+        product.sku ?? "",
         product.status,
         product.soldCount,
       ]),
-    )
+    );
 
-    toast.success(`Exported ${visible.length} products.`)
-  }
+    toast.success(`Exported ${visible.length} products.`);
+  };
 
-  const bulk = async (
-    action: 'archive' | 'submit',
-  ) => {
-    const ids = [...selected]
+  const bulk = async (action: "archive" | "submit") => {
+    const ids = [...selected];
 
     await run(
       () =>
         Promise.all(
           ids.map((id) =>
-            action === 'archive'
+            action === "archive"
               ? productsService.update(id, {
-                  status: 'archived',
+                  status: "archived",
                 })
               : productsService.submitForReview(id),
           ),
         ),
-      action === 'archive'
+      action === "archive"
         ? `Archived ${ids.length} products`
         : `Submitted ${ids.length} products for review`,
-    )
-  }
+    );
+  };
 
   if (productsQ.isError) {
-    return (
-      <ErrorState
-        onRetry={() => void productsQ.refetch()}
-      />
-    )
+    return <ErrorState onRetry={() => void productsQ.refetch()} />;
   }
 
   return (
@@ -444,11 +509,7 @@ export default function ProductsListPage() {
               Export
             </Button>
 
-            <Button
-              asChild
-              size="sm"
-              className="w-full sm:w-auto"
-            >
+            <Button asChild size="sm" className="w-full sm:w-auto">
               <Link to="/merchant/products/new">
                 <Plus className="size-4" />
                 Add product
@@ -458,23 +519,78 @@ export default function ProductsListPage() {
         }
       />
 
+      <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard
+          title="Total products"
+          value={counts.all}
+          description="All catalog products"
+          icon={Package}
+          active={tab === "all" && !lowStockOnly}
+          onClick={() => {
+            setTab("all");
+            setLowStockOnly(false);
+          }}
+        />
+
+        <SummaryCard
+          title="Approved"
+          value={counts.approved}
+          description="Currently available"
+          icon={CheckCircle2}
+          active={tab === "approved" && !lowStockOnly}
+          onClick={() => {
+            setTab("approved");
+            setLowStockOnly(false);
+          }}
+        />
+
+        <SummaryCard
+          title="Pending review"
+          value={counts.pending}
+          description="Waiting for approval"
+          icon={Clock3}
+          active={tab === "pending" && !lowStockOnly}
+          onClick={() => {
+            setTab("pending");
+            setLowStockOnly(false);
+          }}
+        />
+
+        <SummaryCard
+          title="Low stock"
+          value={counts.lowStock}
+          description="Needs attention"
+          icon={AlertTriangle}
+          tone="warning"
+          active={lowStockOnly}
+          onClick={() => {
+            setTab("all");
+            setLowStockOnly(true);
+          }}
+        />
+      </div>
+
       <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="-mx-1 min-w-0 overflow-x-auto px-1 pb-1">
+        <div className="-mx-1 min-w-0 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <Tabs
             value={tab}
-            onValueChange={(value) =>
-              setTab(value as ProductStatus | 'all')
-            }
+            onValueChange={(value) => {
+              setTab(value as ProductTab);
+              setLowStockOnly(false);
+            }}
             className="w-max min-w-full"
           >
-            <TabsList className="inline-flex h-auto min-w-max">
+            <TabsList className="inline-flex h-auto min-w-max gap-1">
               {TAB_OPTIONS.map((option) => (
                 <TabsTrigger
                   key={option.value}
                   value={option.value}
                   className="whitespace-nowrap px-3 text-xs sm:px-4 sm:text-sm"
                 >
-                  {option.label}
+                  <span>{option.label}</span>
+                  <span className="ml-1 rounded-full bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    {counts[option.value]}
+                  </span>
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -486,12 +602,21 @@ export default function ProductsListPage() {
 
           <Input
             value={search}
-            onChange={(event) =>
-              setSearch(event.target.value)
-            }
+            onChange={(event) => setSearch(event.target.value)}
             placeholder="Search by name or SKU…"
-            className="h-10 w-full pl-9"
+            className="h-10 w-full pl-9 pr-9"
           />
+
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="absolute right-2.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Clear product search"
+            >
+              <X className="size-4" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -519,7 +644,7 @@ export default function ProductsListPage() {
               variant="outline"
               size="sm"
               className="w-full sm:w-auto"
-              onClick={() => void bulk('submit')}
+              onClick={() => void bulk("submit")}
             >
               <Send className="size-4" />
               Submit for review
@@ -530,7 +655,7 @@ export default function ProductsListPage() {
               variant="outline"
               size="sm"
               className="w-full sm:w-auto"
-              onClick={() => void bulk('archive')}
+              onClick={() => void bulk("archive")}
             >
               <Archive className="size-4" />
               Archive
@@ -556,17 +681,21 @@ export default function ProductsListPage() {
         <EmptyState
           icon={Package}
           title={
-            search
-              ? 'No matching products'
-              : 'No products yet'
+            search || tab !== "all" || lowStockOnly
+              ? "No matching products"
+              : "No products yet"
           }
           description={
-            search
-              ? 'Try a different search term or switch tabs.'
-              : 'Create your first product to start selling on Vendora.'
+            search || tab !== "all" || lowStockOnly
+              ? "Try a different filter or search term."
+              : "Create your first product to start selling on Vendora."
           }
           action={
-            !search && (
+            search || tab !== "all" || lowStockOnly ? (
+              <Button type="button" variant="outline" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            ) : (
               <Button asChild>
                 <Link to="/merchant/products/new">
                   <Plus className="size-4" />
@@ -590,25 +719,15 @@ export default function ProductsListPage() {
                     />
                   </TableHead>
 
-                  <TableHead className="min-w-[330px]">
-                    Product
-                  </TableHead>
+                  <TableHead className="min-w-[330px]">Product</TableHead>
 
-                  <TableHead className="min-w-[130px]">
-                    Price
-                  </TableHead>
+                  <TableHead className="min-w-[130px]">Price</TableHead>
 
-                  <TableHead className="min-w-[130px]">
-                    Stock
-                  </TableHead>
+                  <TableHead className="min-w-[130px]">Stock</TableHead>
 
-                  <TableHead className="min-w-[150px]">
-                    Status
-                  </TableHead>
+                  <TableHead className="min-w-[150px]">Status</TableHead>
 
-                  <TableHead className="min-w-[90px]">
-                    Sold
-                  </TableHead>
+                  <TableHead className="min-w-[90px]">Sold</TableHead>
 
                   <TableHead className="w-14 min-w-14" />
                 </TableRow>
@@ -618,8 +737,7 @@ export default function ProductsListPage() {
                 {visible.map((product) => {
                   const low =
                     product.stock > 0 &&
-                    product.stock <=
-                      (product.lowStockThreshold ?? 5)
+                    product.stock <= (product.lowStockThreshold ?? 5);
 
                   return (
                     <TableRow
@@ -629,9 +747,7 @@ export default function ProductsListPage() {
                       <TableCell>
                         <Checkbox
                           checked={selected.has(product.id)}
-                          onCheckedChange={() =>
-                            toggleSelect(product.id)
-                          }
+                          onCheckedChange={() => toggleSelect(product.id)}
                           aria-label={`Select ${product.name}`}
                         />
                       </TableCell>
@@ -672,10 +788,7 @@ export default function ProductsListPage() {
                       </TableCell>
 
                       <TableCell className="whitespace-nowrap font-semibold">
-                        {formatCurrency(
-                          product.price,
-                          product.currency,
-                        )}
+                        {formatCurrency(product.price, product.currency)}
                       </TableCell>
 
                       <TableCell>
@@ -697,11 +810,9 @@ export default function ProductsListPage() {
                       </TableCell>
 
                       <TableCell>
-                        <ProductStatusBadge
-                          status={product.status}
-                        />
+                        <ProductStatusBadge status={product.status} />
 
-                        {product.status === 'rejected' &&
+                        {product.status === "rejected" &&
                           product.rejectionReason && (
                             <p
                               className="mt-1 max-w-[220px] truncate text-xs text-destructive"
@@ -742,17 +853,14 @@ export default function ProductsListPage() {
                             </DropdownMenuItem>
 
                             <DropdownMenuItem
-                              onClick={() =>
-                                void duplicate(product)
-                              }
+                              onClick={() => void duplicate(product)}
                             >
                               <Copy className="size-4" />
                               Duplicate
                             </DropdownMenuItem>
 
-                            {(product.status === 'draft' ||
-                              product.status ===
-                                'rejected') && (
+                            {(product.status === "draft" ||
+                              product.status === "rejected") && (
                               <DropdownMenuItem
                                 onClick={() =>
                                   void run(
@@ -760,7 +868,7 @@ export default function ProductsListPage() {
                                       productsService.submitForReview(
                                         product.id,
                                       ),
-                                    'Submitted for review',
+                                    "Submitted for review",
                                   )
                                 }
                               >
@@ -769,18 +877,15 @@ export default function ProductsListPage() {
                               </DropdownMenuItem>
                             )}
 
-                            {product.status === 'archived' ? (
+                            {product.status === "archived" ? (
                               <DropdownMenuItem
                                 onClick={() =>
                                   void run(
                                     () =>
-                                      productsService.update(
-                                        product.id,
-                                        {
-                                          status: 'draft',
-                                        },
-                                      ),
-                                    'Product unarchived',
+                                      productsService.update(product.id, {
+                                        status: "draft",
+                                      }),
+                                    "Product unarchived",
                                   )
                                 }
                               >
@@ -792,14 +897,10 @@ export default function ProductsListPage() {
                                 onClick={() =>
                                   void run(
                                     () =>
-                                      productsService.update(
-                                        product.id,
-                                        {
-                                          status:
-                                            'archived',
-                                        },
-                                      ),
-                                    'Product archived',
+                                      productsService.update(product.id, {
+                                        status: "archived",
+                                      }),
+                                    "Product archived",
                                   )
                                 }
                               >
@@ -812,9 +913,7 @@ export default function ProductsListPage() {
 
                             <DropdownMenuItem
                               className="text-destructive focus:text-destructive"
-                              onClick={() =>
-                                setDeleteTarget(product)
-                              }
+                              onClick={() => setDeleteTarget(product)}
                             >
                               <Trash2 className="size-4" />
                               Delete
@@ -823,7 +922,7 @@ export default function ProductsListPage() {
                         </DropdownMenu>
                       </TableCell>
                     </TableRow>
-                  )
+                  );
                 })}
               </TableBody>
             </Table>
@@ -831,25 +930,29 @@ export default function ProductsListPage() {
         </div>
       )}
 
+      {!productsQ.isLoading && visible.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          Showing {visible.length} of {products.length}{" "}
+          {products.length === 1 ? "product" : "products"}
+        </p>
+      )}
+
       <ConfirmDialog
         open={!!deleteTarget}
-        onOpenChange={(open) =>
-          !open && setDeleteTarget(null)
-        }
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
         title="Delete product?"
         description={`"${deleteTarget?.name}" will be permanently deleted. This cannot be undone.`}
         confirmLabel="Delete"
         destructive
         onConfirm={async () => {
-          if (!deleteTarget) return
+          if (!deleteTarget) return;
 
           await run(
-            () =>
-              productsService.remove(deleteTarget.id),
-            'Product deleted',
-          )
+            () => productsService.remove(deleteTarget.id),
+            "Product deleted",
+          );
 
-          setDeleteTarget(null)
+          setDeleteTarget(null);
         }}
       />
 
@@ -861,28 +964,21 @@ export default function ProductsListPage() {
         confirmLabel="Delete all"
         destructive
         onConfirm={async () => {
-          const ids = [...selected]
+          const ids = [...selected];
 
           await run(
-            () =>
-              Promise.all(
-                ids.map((id) =>
-                  productsService.remove(id),
-                ),
-              ),
+            () => Promise.all(ids.map((id) => productsService.remove(id))),
             `Deleted ${ids.length} products`,
-          )
+          );
         }}
       />
 
       <ImportDialog
         open={importOpen}
         onOpenChange={setImportOpen}
-        onImport={(text) =>
-          importMutation.mutate(text)
-        }
+        onImport={(text) => importMutation.mutate(text)}
         importing={importMutation.isPending}
       />
     </div>
-  )
+  );
 }

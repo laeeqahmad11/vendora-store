@@ -18,6 +18,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/misc'
 import { FormField } from '@/components/shared/form-field'
 import { ImageUploader } from '@/components/shared/image-uploader'
 import { PageHeader } from '@/layouts/dashboard-layout'
@@ -47,6 +48,14 @@ const schema = z.object({
   businessName: z.string().optional(),
   businessHours: z.string().optional(),
   shippingPolicy: z.string().optional(),
+  shippingEnabled: z.boolean(),
+  shippingFee: z
+    .number()
+    .min(0, 'Shipping fee cannot be negative'),
+  freeShippingThreshold: z
+    .number()
+    .min(0, 'Free-shipping threshold cannot be negative'),
+  estimatedDeliveryDays: z.string().optional(),
   facebook: z.string().optional(),
   instagram: z.string().optional(),
   twitter: z.string().optional(),
@@ -75,6 +84,8 @@ export default function StoreSettingsPage() {
   const {
     register,
     handleSubmit,
+    watch,
+    setValue,
     formState: {
       errors,
       isSubmitting,
@@ -93,6 +104,14 @@ export default function StoreSettingsPage() {
         store.businessHours ?? '',
       shippingPolicy:
         store.shippingPolicy ?? '',
+      shippingEnabled:
+        store.shippingEnabled ?? true,
+      shippingFee:
+        store.shippingFee ?? 0,
+      freeShippingThreshold:
+        store.freeShippingThreshold ?? 0,
+      estimatedDeliveryDays:
+        store.estimatedDeliveryDays ?? '',
       facebook:
         store.socialLinks?.facebook ?? '',
       instagram:
@@ -106,6 +125,8 @@ export default function StoreSettingsPage() {
         store.seo?.description ?? '',
     },
   })
+
+  const shippingEnabled = watch('shippingEnabled')
 
   const storeUrl = `${window.location.origin}/stores/${store.slug}`
 
@@ -140,6 +161,21 @@ export default function StoreSettingsPage() {
           values.businessHours || undefined,
         shippingPolicy:
           values.shippingPolicy || undefined,
+        shippingEnabled:
+          values.shippingEnabled,
+        shippingFee:
+          values.shippingEnabled
+            ? values.shippingFee
+            : 0,
+        freeShippingThreshold:
+          values.shippingEnabled &&
+          values.freeShippingThreshold > 0
+            ? values.freeShippingThreshold
+            : 0,
+        estimatedDeliveryDays:
+          values.shippingEnabled
+            ? values.estimatedDeliveryDays || undefined
+            : undefined,
         logoUrl: logo[0],
         bannerUrl: banner[0],
         socialLinks: {
@@ -417,6 +453,107 @@ export default function StoreSettingsPage() {
                 placeholder="Delivery times, areas covered, fees…"
                 {...register(
                   'shippingPolicy',
+                )}
+              />
+            </FormField>
+          </CardContent>
+        </Card>
+
+        <Card className="min-w-0 overflow-hidden">
+          <CardHeader className="p-4 sm:p-6">
+            <CardTitle>
+              Shipping settings
+            </CardTitle>
+
+            <CardDescription>
+              Configure the delivery fee and free-shipping rules used at checkout.
+            </CardDescription>
+          </CardHeader>
+
+          <CardContent className="space-y-5 p-4 pt-0 sm:p-6 sm:pt-0">
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border p-4">
+              <Checkbox
+                checked={shippingEnabled}
+                onCheckedChange={(checked) =>
+                  setValue(
+                    'shippingEnabled',
+                    checked === true,
+                    {
+                      shouldDirty: true,
+                      shouldValidate: true,
+                    },
+                  )
+                }
+              />
+
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">
+                  Enable shipping
+                </span>
+
+                <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                  When disabled, checkout will treat delivery as free for this store.
+                </span>
+              </span>
+            </label>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                label="Flat shipping fee"
+                hint="Applied once per order from this store."
+                error={errors.shippingFee?.message}
+              >
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  placeholder="250"
+                  disabled={!shippingEnabled}
+                  {...register('shippingFee', {
+                    valueAsNumber: true,
+                  })}
+                />
+              </FormField>
+
+              <FormField
+                label="Free shipping above"
+                hint="Enter 0 to disable free shipping."
+                error={
+                  errors.freeShippingThreshold
+                    ?.message
+                }
+              >
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  placeholder="5000"
+                  disabled={!shippingEnabled}
+                  {...register(
+                    'freeShippingThreshold',
+                    {
+                      valueAsNumber: true,
+                    },
+                  )}
+                />
+              </FormField>
+            </div>
+
+            <FormField
+              label="Estimated delivery time"
+              hint="Shown to customers during checkout."
+              error={
+                errors.estimatedDeliveryDays
+                  ?.message
+              }
+            >
+              <Input
+                placeholder="e.g. 3–5 working days"
+                disabled={!shippingEnabled}
+                {...register(
+                  'estimatedDeliveryDays',
                 )}
               />
             </FormField>

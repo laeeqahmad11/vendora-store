@@ -11,10 +11,14 @@ import {
   Settings,
   Shapes,
   ShoppingCart,
+  Star,
   Store,
   Users,
 } from 'lucide-react'
-import { DashboardLayout, type DashboardNavItem } from '@/layouts/dashboard-layout'
+import {
+  DashboardLayout,
+  type DashboardNavItem,
+} from '@/layouts/dashboard-layout'
 import { Spinner } from '@/components/ui/misc'
 
 const OverviewPage = React.lazy(() => import('./pages/overview'))
@@ -23,6 +27,7 @@ const ProductApprovalPage = React.lazy(() => import('./pages/product-approval'))
 const OrdersMonitorPage = React.lazy(() => import('./pages/orders-monitor'))
 const CatalogPage = React.lazy(() => import('./pages/catalog'))
 const UsersPage = React.lazy(() => import('./pages/users'))
+const ReviewsPage = React.lazy(() => import('./pages/reviews'))
 const PromotionsPage = React.lazy(() => import('./pages/promotions'))
 const CMSPage = React.lazy(() => import('./pages/cms'))
 const SupportTicketsPage = React.lazy(() => import('./pages/support'))
@@ -37,6 +42,7 @@ const nav: DashboardNavItem[] = [
   { to: '/admin/orders', label: 'Orders', icon: ShoppingCart },
   { to: '/admin/catalog', label: 'Catalog', icon: Shapes },
   { to: '/admin/users', label: 'Users', icon: Users },
+  { to: '/admin/reviews', label: 'Reviews', icon: Star },
   { to: '/admin/promotions', label: 'Promotions', icon: Megaphone },
   { to: '/admin/cms', label: 'CMS', icon: FileText },
   { to: '/admin/support', label: 'Support', icon: LifeBuoy },
@@ -59,6 +65,7 @@ export const adminRoutes: RouteObject[] = [
       { path: 'orders', element: page(<OrdersMonitorPage />) },
       { path: 'catalog', element: page(<CatalogPage />) },
       { path: 'users', element: page(<UsersPage />) },
+      { path: 'reviews', element: page(<ReviewsPage />) },
       { path: 'promotions', element: page(<PromotionsPage />) },
       { path: 'cms', element: page(<CMSPage />) },
       { path: 'support', element: page(<SupportTicketsPage />) },
