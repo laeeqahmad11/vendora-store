@@ -5,6 +5,7 @@ const externalBaseURL = process.env.PLAYWRIGHT_BASE_URL
 
 export default defineConfig({
   testDir: './tests',
+  testIgnore: ['**/auth.setup.ts', '**/authenticated/**'],
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 1,
@@ -23,11 +24,13 @@ export default defineConfig({
   use: {
     baseURL: externalBaseURL ?? localBaseURL,
     screenshot: 'only-on-failure',
+    serviceWorkers: 'block',
     trace: 'on-first-retry',
   },
   projects: [
     {
       name: 'chromium',
+      metadata: { allowFirebaseEmulators: false },
       use: { ...devices['Desktop Chrome'] },
     },
   ],
@@ -38,6 +41,7 @@ export default defineConfig({
         url: localBaseURL,
         reuseExistingServer: false,
         timeout: 120_000,
+        gracefulShutdown: { signal: 'SIGINT', timeout: 1_000 },
         env: {
           ...process.env,
           // Keep smoke tests isolated from any Firebase project in .env.local.
