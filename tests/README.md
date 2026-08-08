@@ -15,6 +15,11 @@ Tests are organized by feature:
 - `smoke/` contains public storefront checks.
 - `auth/` contains public authentication-page checks.
 - `authenticated/` contains emulator-backed role access checks.
+- `authenticated/merchant-products.spec.ts` covers the approved merchant's
+  product lifecycle from an empty catalog through draft, edit, and pending
+  review. It resets Firestore and Storage and reseeds deterministic documents
+  before each attempt while preserving the authenticated emulator users, so
+  deterministic names and SKUs remain retry-safe.
 - `auth.setup.ts` signs in once per role and writes ignored storage states to
   `tests/.auth/`.
 
