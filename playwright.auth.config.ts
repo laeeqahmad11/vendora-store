@@ -2,8 +2,7 @@ import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 
 const baseURL = 'http://127.0.0.1:5173'
-const authState = (role: 'customer' | 'merchant' | 'admin') =>
-  path.resolve('tests', '.auth', `${role}.json`)
+const authState = (role: 'customer' | 'merchant' | 'admin') => path.resolve('tests', '.auth', `${role}.json`)
 
 const sharedUse = {
   ...devices['Desktop Chrome'],
@@ -24,10 +23,7 @@ export default defineConfig({
     timeout: 10_000,
   },
   outputDir: 'test-results/authenticated',
-  reporter: [
-    ['list'],
-    ['html', { outputFolder: 'playwright-report/authenticated', open: 'never' }],
-  ],
+  reporter: [['list'], ['html', { outputFolder: 'playwright-report/authenticated', open: 'never' }]],
   projects: [
     {
       name: 'auth-setup',
@@ -66,6 +62,13 @@ export default defineConfig({
     {
       name: 'customer-order',
       testMatch: /authenticated\/customer-order\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('customer') },
+    },
+    {
+      name: 'merchant-order-fulfillment',
+      testMatch: /authenticated\/merchant-order-fulfillment\.spec\.ts/,
       dependencies: ['auth-setup'],
       metadata: { allowFirebaseEmulators: true },
       use: { ...sharedUse, storageState: authState('customer') },

@@ -23,6 +23,13 @@ Tests are organized by feature:
 - `authenticated/product-approval.spec.ts` continues that same UI lifecycle
   across merchant, admin, and signed-out public contexts: admin approval,
   merchant Approved status, and public store/product visibility.
+- `authenticated/customer-order.spec.ts` places a deterministic COD order and
+  verifies customer, merchant, inventory, and admin visibility.
+- `authenticated/merchant-order-fulfillment.spec.ts` advances that real order
+  through every merchant fulfillment action (confirmed, packed, ready,
+  dispatched, delivered, and COD completion), checking customer/admin status,
+  timestamped timelines, audit activity, and unchanged post-checkout inventory
+  after every transition.
 - `auth.setup.ts` signs in once per role and writes ignored storage states to
   `tests/.auth/`.
 
