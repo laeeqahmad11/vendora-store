@@ -20,6 +20,9 @@ Tests are organized by feature:
   review. It resets Firestore and Storage and reseeds deterministic documents
   before each attempt while preserving the authenticated emulator users, so
   deterministic names and SKUs remain retry-safe.
+- `authenticated/product-approval.spec.ts` continues that same UI lifecycle
+  across merchant, admin, and signed-out public contexts: admin approval,
+  merchant Approved status, and public store/product visibility.
 - `auth.setup.ts` signs in once per role and writes ignored storage states to
   `tests/.auth/`.
 

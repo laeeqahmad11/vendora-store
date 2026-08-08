@@ -56,6 +56,13 @@ export default defineConfig({
       metadata: { allowFirebaseEmulators: true },
       use: { ...sharedUse, storageState: authState('admin') },
     },
+    {
+      name: 'product-approval',
+      testMatch: /authenticated\/product-approval\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('merchant') },
+    },
   ],
   webServer: {
     command: 'node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort',
