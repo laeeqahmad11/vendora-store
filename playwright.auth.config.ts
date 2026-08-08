@@ -87,6 +87,13 @@ export default defineConfig({
       metadata: { allowFirebaseEmulators: true },
       use: { ...sharedUse, storageState: authState('customer') },
     },
+    {
+      name: 'return-refund',
+      testMatch: /authenticated\/return-refund\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('customer') },
+    },
   ],
   webServer: {
     command: 'node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort',
