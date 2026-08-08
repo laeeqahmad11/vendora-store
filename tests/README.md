@@ -34,6 +34,10 @@ Tests are organized by feature:
   through the customer UI, checks exact stock and Sold restoration, verifies the
   cancellation timeline and audit activity, and confirms the final state across
   customer, merchant, inventory, and admin views.
+- `authenticated/merchant-order-cancellation.spec.ts` cancels real pending and
+  confirmed COD orders through the merchant UI, verifies the required reason,
+  exact-once stock and Sold restoration, blocked post-cancellation actions, and
+  the final customer, merchant, inventory, and admin views.
 - `auth.setup.ts` signs in once per role and writes ignored storage states to
   `tests/.auth/`.
 

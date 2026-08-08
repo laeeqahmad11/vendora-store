@@ -80,6 +80,13 @@ export default defineConfig({
       metadata: { allowFirebaseEmulators: true },
       use: { ...sharedUse, storageState: authState('customer') },
     },
+    {
+      name: 'merchant-order-cancellation',
+      testMatch: /authenticated\/merchant-order-cancellation\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('customer') },
+    },
   ],
   webServer: {
     command: 'node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort',
