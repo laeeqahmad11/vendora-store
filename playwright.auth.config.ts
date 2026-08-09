@@ -40,6 +40,13 @@ export default defineConfig({
       use: { ...sharedUse, storageState: authState('customer') },
     },
     {
+      name: 'wishlist',
+      testMatch: /authenticated\/wishlist\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('customer') },
+    },
+    {
       name: 'merchant',
       testMatch: /authenticated\/merchant(?:-products)?\.spec\.ts/,
       dependencies: ['auth-setup'],
@@ -110,21 +117,23 @@ export default defineConfig({
       use: { ...sharedUse, storageState: authState('customer') },
     },
   ],
-  webServer: managedServer ? undefined : {
-    command: 'node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort',
-    url: baseURL,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    gracefulShutdown: { signal: 'SIGINT', timeout: 1_000 },
-    env: {
-      ...process.env,
-      VITE_FIREBASE_API_KEY: 'demo-vendora-e2e-api-key',
-      VITE_FIREBASE_AUTH_DOMAIN: 'demo-vendora-e2e.firebaseapp.com',
-      VITE_FIREBASE_PROJECT_ID: 'demo-vendora-e2e',
-      VITE_FIREBASE_STORAGE_BUCKET: 'demo-vendora-e2e.appspot.com',
-      VITE_FIREBASE_MESSAGING_SENDER_ID: '000000000000',
-      VITE_FIREBASE_APP_ID: '1:000000000000:web:e2e000000000000000000',
-      VITE_USE_EMULATORS: 'true',
-    },
-  },
+  webServer: managedServer
+    ? undefined
+    : {
+        command: 'node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort',
+        url: baseURL,
+        reuseExistingServer: false,
+        timeout: 120_000,
+        gracefulShutdown: { signal: 'SIGINT', timeout: 1_000 },
+        env: {
+          ...process.env,
+          VITE_FIREBASE_API_KEY: 'demo-vendora-e2e-api-key',
+          VITE_FIREBASE_AUTH_DOMAIN: 'demo-vendora-e2e.firebaseapp.com',
+          VITE_FIREBASE_PROJECT_ID: 'demo-vendora-e2e',
+          VITE_FIREBASE_STORAGE_BUCKET: 'demo-vendora-e2e.appspot.com',
+          VITE_FIREBASE_MESSAGING_SENDER_ID: '000000000000',
+          VITE_FIREBASE_APP_ID: '1:000000000000:web:e2e000000000000000000',
+          VITE_USE_EMULATORS: 'true',
+        },
+      },
 })

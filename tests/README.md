@@ -35,6 +35,11 @@ Tests are organized by feature:
   quantity controls, cart removal, exact-once last-unit checkout, success-flow
   reload/revisit behavior, cross-role visibility, stale-cart rejection, and
   atomic rejection when one item in a multi-item checkout becomes unavailable.
+- `authenticated/wishlist.spec.ts` covers the current local-only wishlist model:
+  public product-detail and product-card controls, authenticated account access,
+  reload/navigation and logout/login persistence, toggle-based duplicate
+  protection, removal, cross-surface state, move-to-cart semantics, and safe
+  out-of-stock handling.
 - `authenticated/merchant-order-fulfillment.spec.ts` advances that real order
   through every merchant fulfillment action (confirmed, packed, ready,
   dispatched, delivered, and COD completion), checking customer/admin status,
