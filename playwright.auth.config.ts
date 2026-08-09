@@ -46,6 +46,13 @@ export default defineConfig({
       use: { ...sharedUse, storageState: authState('merchant') },
     },
     {
+      name: 'merchant-inventory',
+      testMatch: /authenticated\/merchant-inventory\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('merchant') },
+    },
+    {
       name: 'admin',
       testMatch: /authenticated\/admin\.spec\.ts/,
       dependencies: ['auth-setup'],

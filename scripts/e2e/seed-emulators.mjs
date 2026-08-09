@@ -29,6 +29,15 @@ const CATALOG = {
     slug: 'e2e-voltedge',
   },
 }
+const INVENTORY_PRODUCT = {
+  id: 'e2e-inventory-product',
+  name: 'E2E Inventory Control Product',
+  slug: 'e2e-inventory-control-product',
+  sku: 'E2E-INV-027',
+  stock: 27,
+  soldCount: 0,
+  lowStockThreshold: 5,
+}
 
 const USERS = [
   {
@@ -84,26 +93,17 @@ async function resetEmulators({ preserveAuth = false } = {}) {
       'Firestore',
       `http://${FIRESTORE_HOST}/emulator/v1/projects/${PROJECT_ID}/databases/(default)/documents`,
     ),
-    clearEmulator(
-      'Storage',
-      `http://${STORAGE_HOST}/internal/reset`,
-      'POST',
-    ),
+    clearEmulator('Storage', `http://${STORAGE_HOST}/internal/reset`, 'POST'),
   ]
 
   if (!preserveAuth) {
-    resets.push(
-      clearEmulator(
-        'Auth',
-        `http://${AUTH_HOST}/emulator/v1/projects/${PROJECT_ID}/accounts`,
-      ),
-    )
+    resets.push(clearEmulator('Auth', `http://${AUTH_HOST}/emulator/v1/projects/${PROJECT_ID}/accounts`))
   }
 
   await Promise.all(resets)
 }
 
-async function seed({ preserveAuth = false } = {}) {
+async function seed({ preserveAuth = false, inventoryProduct = false } = {}) {
   process.env.GCLOUD_PROJECT = PROJECT_ID
   process.env.FIREBASE_CONFIG = JSON.stringify({
     projectId: PROJECT_ID,
@@ -197,11 +197,47 @@ async function seed({ preserveAuth = false } = {}) {
       createdAt: now,
     }),
   ])
+
+  if (inventoryProduct) {
+    await db.doc(`products/${INVENTORY_PRODUCT.id}`).set({
+      storeId: 'e2e-approved-store',
+      merchantId: 'e2e-merchant',
+      name: INVENTORY_PRODUCT.name,
+      slug: INVENTORY_PRODUCT.slug,
+      description: 'Deterministic emulator-only product for merchant inventory E2E coverage.',
+      images: [],
+      price: 2700,
+      currency: 'USD',
+      sku: INVENTORY_PRODUCT.sku,
+      stock: INVENTORY_PRODUCT.stock,
+      lowStockThreshold: INVENTORY_PRODUCT.lowStockThreshold,
+      minOrderQty: 1,
+      maxOrderQty: 27,
+      categoryId: CATALOG.category.id,
+      subcategoryId: CATALOG.subcategory.id,
+      brandId: CATALOG.brand.id,
+      tags: ['e2e', 'inventory'],
+      status: 'approved',
+      rejectionReason: '',
+      featured: false,
+      trending: false,
+      recommended: false,
+      flashSale: null,
+      rating: 0,
+      ratingCount: 0,
+      soldCount: INVENTORY_PRODUCT.soldCount,
+      viewCount: 0,
+      createdAt: now,
+      updatedAt: now,
+      publishedAt: now,
+    })
+  }
 }
 
 async function main() {
   assertSafeTarget()
   const preserveAuth = process.argv.includes('--preserve-auth')
+  const inventoryProduct = process.argv.includes('--inventory-product')
   await resetEmulators({ preserveAuth })
 
   if (process.argv.includes('--reset-only')) {
@@ -209,10 +245,17 @@ async function main() {
     return
   }
 
-  await seed({ preserveAuth })
+  await seed({ preserveAuth, inventoryProduct })
   console.log(`Seeded Firebase emulators for ${PROJECT_ID}:`)
   for (const user of USERS) {
     console.log(`  ${user.role}: ${user.email} / ${TEST_PASSWORD}`)
+  }
+  if (inventoryProduct) {
+    console.log(
+      `  inventory product: ${INVENTORY_PRODUCT.name} (${INVENTORY_PRODUCT.sku}), ` +
+        `stock ${INVENTORY_PRODUCT.stock}, sold ${INVENTORY_PRODUCT.soldCount}, ` +
+        `low-stock threshold ${INVENTORY_PRODUCT.lowStockThreshold}`,
+    )
   }
 }
 
