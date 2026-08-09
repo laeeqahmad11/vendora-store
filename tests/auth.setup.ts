@@ -31,14 +31,14 @@ const accounts = [
 ] as const
 
 async function login(page: Page, account: (typeof accounts)[number]) {
-  await page.goto('/auth/login')
+  await page.goto(account.destination)
+  await expect(page).toHaveURL('/auth/login')
   await page.locator('input[type="email"]').fill(account.email)
   await page.locator('input[type="password"]').fill(password)
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(
     page.getByText(`Welcome back, ${account.displayName}!`, { exact: true }),
   ).toBeVisible()
-  await page.goto(account.destination)
   await expect(page).toHaveURL(account.destination)
   await expect(page.getByRole('heading', { name: account.heading, exact: true })).toBeVisible()
 }

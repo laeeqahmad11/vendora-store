@@ -14,26 +14,17 @@ export async function installNetworkPolicy(
     allowedOrigins.add('http://127.0.0.1:9199')
   }
 
-  await page.route('**/*', async (route) => {
-    const requestURL = new URL(route.request().url())
-    const isNetworkRequest = requestURL.protocol === 'http:' || requestURL.protocol === 'https:'
+  const allowedHosts = [...allowedOrigins]
+    .map((origin) => new URL(origin).host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|')
+  const blockedHttp = new RegExp(`^https?://(?!(?:${allowedHosts})(?:/|$))`, 'i')
+  const blockedWebSocket = new RegExp(`^wss?://(?!(?:${allowedHosts})(?:/|$))`, 'i')
 
-    if (isNetworkRequest && !allowedOrigins.has(requestURL.origin)) {
-      await route.abort('blockedbyclient')
-      return
-    }
-
-    await route.continue()
-  })
-
-  await page.routeWebSocket(
-    (url) => {
-      const socketOrigin = `${url.protocol === 'wss:' ? 'https:' : 'http:'}//${url.host}`
-      return !allowedOrigins.has(socketOrigin)
-    },
-    async (webSocket) => {
-      await webSocket.close({ code: 1008, reason: 'Blocked by E2E network policy' })
-    },
+  // Match only forbidden origins so allowed localhost responses retain normal
+  // browser caching and bypass unnecessary Playwright route dispatch.
+  await page.route(blockedHttp, (route) => route.abort('blockedbyclient'))
+  await page.routeWebSocket(blockedWebSocket, (webSocket) =>
+    webSocket.close({ code: 1008, reason: 'Blocked by E2E network policy' }),
   )
 }
 

@@ -1,10 +1,16 @@
 # End-to-end tests
 
-Playwright starts Vite on `http://127.0.0.1:5173` with inert Firebase
+The E2E runner builds the configured app with Vite, waits for Vite to exit, and
+serves the build from memory on `http://127.0.0.1:5173` with inert Firebase
 configuration by default. This prevents the public smoke suite from addressing
 the Firebase project configured in `.env.local`. The shared fixture blocks
 browser HTTP, HTTPS, and WebSocket traffic to every origin except the configured
 application origin.
+
+The E2E-only build emits one JavaScript bundle. This keeps the application and
+its `React.lazy` route boundaries intact while avoiding an intermittent Windows
+loopback/browser-middleware stall observed on later dynamic chunk requests.
+Normal production builds keep their existing code-splitting configuration.
 
 The current suite is intentionally read-only: it only loads public pages and
 follows public links. It does not submit authentication, contact, newsletter,
@@ -57,8 +63,9 @@ testing is explicitly safe.
 
 ## Authenticated emulator tests
 
-Authenticated tests use the separate `playwright.auth.config.ts`. Its Vite
-server receives fake `demo-vendora-e2e` Firebase values and
+Authenticated tests use the separate `playwright.auth.config.ts`. The E2E runner
+directly owns the Firebase CLI, Vite build, localhost server, and Playwright
+child processes. The build receives fake `demo-vendora-e2e` Firebase values and
 `VITE_USE_EMULATORS=true`; it never loads production Firebase values from
 `.env.local`. For this config, the browser allowlist is exactly:
 
@@ -78,20 +85,26 @@ npm run test:e2e:auth
 
 The command starts the three emulators with the explicit
 `demo-vendora-e2e` project, resets all emulator data, seeds deterministic role
-fixtures, runs Playwright, and shuts the emulators down.
+fixtures, runs Playwright, and shuts the emulators down. Startup waits on the
+emulator hub, every emulator listener, and the app HTTP endpoint rather than
+fixed delays. Teardown asks the
+Firebase CLI to cleanly stop its registered children, applies a bounded
+process-tree fallback if needed, and fails if any managed localhost port remains
+open.
 
 Firestore and Storage emulator rule runtimes require Java 21 or newer. Install
-Java and make `java` available on `PATH`. Then download the version-pinned
-emulator binaries once:
+the verified Eclipse Temurin runtime and version-pinned emulator binaries once:
 
 ```sh
 npm run e2e:emulators:install
 ```
 
-This installation command is the only E2E command permitted to download
-emulator artifacts. Normal start/test commands disable Firebase CLI update
-checks and analytics, block non-loopback CLI fetches, and refuse implicit
-binary downloads.
+The Java runtime is stored under ignored `.firebase/java` instead of a temporary
+directory, so subsequent shells find it automatically without changing the
+machine PATH. This installation command is the only E2E command permitted to
+download Java or emulator artifacts. Normal start/test commands disable Firebase
+CLI update checks and analytics, block non-loopback CLI fetches, and refuse
+implicit binary downloads.
 
 For manual development:
 

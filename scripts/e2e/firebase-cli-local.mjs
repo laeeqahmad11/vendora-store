@@ -11,6 +11,7 @@
 
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { configureJava } from './runtime.mjs'
 
 const require = createRequire(import.meta.url)
 const allowDownloads = process.argv[2] === '--allow-downloads'
@@ -23,6 +24,11 @@ process.env.NO_UPDATE_NOTIFIER = '1'
 process.env.DEBUG = ''
 process.env.XDG_CONFIG_HOME = path.resolve('.firebase', 'e2e-config')
 process.env.FIREBASE_EMULATORS_PATH = path.resolve('.firebase', 'emulators')
+
+const command = process.argv[2]
+if (command?.startsWith('emulators:')) {
+  configureJava()
+}
 
 const nativeFetch = globalThis.fetch
 globalThis.fetch = async (input, init) => {
@@ -61,4 +67,24 @@ if (!allowDownloads) {
 
 const firebasePackage = require('../../node_modules/firebase-tools/package.json')
 const { cli } = require('../../node_modules/firebase-tools/lib/bin/cli.js')
+
+// The managed E2E runner uses IPC so Firebase can stop its Java and Node
+// children through the CLI's normal registry before the parent exits.
+if (process.send) {
+  let shuttingDown = false
+  process.on('message', async (message) => {
+    if (message?.type !== 'vendora-e2e-shutdown' || shuttingDown) return
+    shuttingDown = true
+    try {
+      const controller = require('../../node_modules/firebase-tools/lib/emulator/controller.js')
+      await controller.cleanShutdown()
+      process.disconnect()
+      process.exit(0)
+    } catch (error) {
+      console.error('Firebase clean shutdown failed:', error)
+      process.exit(1)
+    }
+  })
+}
+
 cli(firebasePackage)

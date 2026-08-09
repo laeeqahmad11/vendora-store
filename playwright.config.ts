@@ -8,7 +8,7 @@ export default defineConfig({
   testIgnore: ['**/auth.setup.ts', '**/authenticated/**'],
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 2 : 1,
+  retries: process.env.CI ? 2 : 0,
   // A single worker keeps local Vite startup deterministic on Windows and
   // avoids multiplying Firebase-independent smoke traffic.
   workers: 1,
@@ -25,7 +25,7 @@ export default defineConfig({
     baseURL: externalBaseURL ?? localBaseURL,
     screenshot: 'only-on-failure',
     serviceWorkers: 'block',
-    trace: 'on-first-retry',
+    trace: 'retain-on-failure',
   },
   projects: [
     {

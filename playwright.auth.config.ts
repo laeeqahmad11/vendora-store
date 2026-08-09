@@ -2,6 +2,7 @@ import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 
 const baseURL = 'http://127.0.0.1:5173'
+const managedServer = process.env.PLAYWRIGHT_MANAGED_SERVER === 'true'
 const authState = (role: 'customer' | 'merchant' | 'admin') => path.resolve('tests', '.auth', `${role}.json`)
 
 const sharedUse = {
@@ -9,7 +10,7 @@ const sharedUse = {
   baseURL,
   screenshot: 'only-on-failure' as const,
   serviceWorkers: 'block' as const,
-  trace: 'on-first-retry' as const,
+  trace: 'retain-on-failure' as const,
 }
 
 export default defineConfig({
@@ -109,7 +110,7 @@ export default defineConfig({
       use: { ...sharedUse, storageState: authState('customer') },
     },
   ],
-  webServer: {
+  webServer: managedServer ? undefined : {
     command: 'node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort',
     url: baseURL,
     reuseExistingServer: false,
