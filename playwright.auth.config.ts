@@ -74,6 +74,13 @@ export default defineConfig({
       use: { ...sharedUse, storageState: authState('customer') },
     },
     {
+      name: 'checkout-stock-edge',
+      testMatch: /authenticated\/checkout-stock-edge\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('customer') },
+    },
+    {
       name: 'merchant-order-fulfillment',
       testMatch: /authenticated\/merchant-order-fulfillment\.spec\.ts/,
       dependencies: ['auth-setup'],

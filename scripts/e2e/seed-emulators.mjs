@@ -38,6 +38,44 @@ const INVENTORY_PRODUCT = {
   soldCount: 0,
   lowStockThreshold: 5,
 }
+const CHECKOUT_STOCK_PRODUCTS = [
+  {
+    id: 'e2e-checkout-out-of-stock',
+    name: 'E2E Checkout Out of Stock',
+    slug: 'e2e-checkout-out-of-stock',
+    sku: 'E2E-CHK-OUT-000',
+    price: 1100,
+    stock: 0,
+    maxOrderQty: 5,
+  },
+  {
+    id: 'e2e-checkout-limited-stock',
+    name: 'E2E Checkout Limited Stock',
+    slug: 'e2e-checkout-limited-stock',
+    sku: 'E2E-CHK-LIM-002',
+    price: 1200,
+    stock: 2,
+    maxOrderQty: 10,
+  },
+  {
+    id: 'e2e-checkout-last-unit',
+    name: 'E2E Checkout Last Unit',
+    slug: 'e2e-checkout-last-unit',
+    sku: 'E2E-CHK-LAST-001',
+    price: 1300,
+    stock: 1,
+    maxOrderQty: 10,
+  },
+  {
+    id: 'e2e-checkout-stale-cart',
+    name: 'E2E Checkout Stale Cart',
+    slug: 'e2e-checkout-stale-cart',
+    sku: 'E2E-CHK-STALE-001',
+    price: 1400,
+    stock: 1,
+    maxOrderQty: 10,
+  },
+]
 
 const USERS = [
   {
@@ -103,7 +141,7 @@ async function resetEmulators({ preserveAuth = false } = {}) {
   await Promise.all(resets)
 }
 
-async function seed({ preserveAuth = false, inventoryProduct = false } = {}) {
+async function seed({ preserveAuth = false, inventoryProduct = false, checkoutStockProducts = false } = {}) {
   process.env.GCLOUD_PROJECT = PROJECT_ID
   process.env.FIREBASE_CONFIG = JSON.stringify({
     projectId: PROJECT_ID,
@@ -232,12 +270,50 @@ async function seed({ preserveAuth = false, inventoryProduct = false } = {}) {
       publishedAt: now,
     })
   }
+
+  if (checkoutStockProducts) {
+    for (const product of CHECKOUT_STOCK_PRODUCTS) {
+      await db.doc(`products/${product.id}`).set({
+        storeId: 'e2e-approved-store',
+        merchantId: 'e2e-merchant',
+        name: product.name,
+        slug: product.slug,
+        description: 'Deterministic emulator-only product for checkout and stock edge-case E2E coverage.',
+        images: [`http://${STORAGE_HOST}/v0/b/${STORAGE_BUCKET}/o/e2e%2Fcheckout-stock.png?alt=media`],
+        price: product.price,
+        currency: 'USD',
+        sku: product.sku,
+        stock: product.stock,
+        lowStockThreshold: 2,
+        minOrderQty: 1,
+        maxOrderQty: product.maxOrderQty,
+        categoryId: CATALOG.category.id,
+        subcategoryId: CATALOG.subcategory.id,
+        brandId: CATALOG.brand.id,
+        tags: ['e2e', 'checkout', 'stock-edge'],
+        status: 'approved',
+        rejectionReason: '',
+        featured: false,
+        trending: false,
+        recommended: false,
+        flashSale: null,
+        rating: 0,
+        ratingCount: 0,
+        soldCount: 0,
+        viewCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        publishedAt: now,
+      })
+    }
+  }
 }
 
 async function main() {
   assertSafeTarget()
   const preserveAuth = process.argv.includes('--preserve-auth')
   const inventoryProduct = process.argv.includes('--inventory-product')
+  const checkoutStockProducts = process.argv.includes('--checkout-stock-products')
   await resetEmulators({ preserveAuth })
 
   if (process.argv.includes('--reset-only')) {
@@ -245,7 +321,7 @@ async function main() {
     return
   }
 
-  await seed({ preserveAuth, inventoryProduct })
+  await seed({ preserveAuth, inventoryProduct, checkoutStockProducts })
   console.log(`Seeded Firebase emulators for ${PROJECT_ID}:`)
   for (const user of USERS) {
     console.log(`  ${user.role}: ${user.email} / ${TEST_PASSWORD}`)
@@ -256,6 +332,14 @@ async function main() {
         `stock ${INVENTORY_PRODUCT.stock}, sold ${INVENTORY_PRODUCT.soldCount}, ` +
         `low-stock threshold ${INVENTORY_PRODUCT.lowStockThreshold}`,
     )
+  }
+  if (checkoutStockProducts) {
+    for (const product of CHECKOUT_STOCK_PRODUCTS) {
+      console.log(
+        `  checkout product: ${product.name} (${product.sku}), ` +
+          `stock ${product.stock}, sold 0, max order ${product.maxOrderQty}`,
+      )
+    }
   }
 }
 

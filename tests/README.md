@@ -25,6 +25,10 @@ Tests are organized by feature:
   merchant Approved status, and public store/product visibility.
 - `authenticated/customer-order.spec.ts` places a deterministic COD order and
   verifies customer, merchant, inventory, and admin visibility.
+- `authenticated/checkout-stock-edge.spec.ts` covers out-of-stock and limited
+  quantity controls, cart removal, exact-once last-unit checkout, success-flow
+  reload/revisit behavior, cross-role visibility, stale-cart rejection, and
+  atomic rejection when one item in a multi-item checkout becomes unavailable.
 - `authenticated/merchant-order-fulfillment.spec.ts` advances that real order
   through every merchant fulfillment action (confirmed, packed, ready,
   dispatched, delivered, and COD completion), checking customer/admin status,

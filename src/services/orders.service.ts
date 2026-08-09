@@ -1,8 +1,12 @@
 import {
   arrayUnion,
+  collection,
+  doc,
   increment,
   limit,
   orderBy,
+  runTransaction,
+  serverTimestamp,
   where,
   type QueryConstraint,
 } from 'firebase/firestore'
@@ -11,7 +15,6 @@ import {
   NEXT_ORDER_STATUS,
 } from '@/lib/constants'
 import {
-  createDocument,
   getDocById,
   queryDocs,
   updateDocument,
@@ -19,11 +22,13 @@ import {
 import { activityService } from '@/services/activity.service'
 import { notificationsService } from '@/services/notifications.service'
 import { productsService } from '@/services/products.service'
-import { generateOrderNumber } from '@/lib/utils'
+import { db } from '@/lib/firebase'
+import { generateOrderNumber, stripUndefined } from '@/lib/utils'
 import type {
   Order,
   OrderStatus,
   OrderTimelineEntry,
+  Product,
   UserRole,
 } from '@/types'
 
@@ -31,6 +36,13 @@ interface Actor {
   id: string
   name: string
   role: UserRole
+}
+
+const unavailableProductMessage =
+  'One or more products are unavailable or their stock changed. Please review your cart and try again.'
+
+function inventoryError(): Error {
+  return new Error(unavailableProductMessage)
 }
 
 /**
@@ -141,52 +153,122 @@ export const ordersService = {
     >[],
     actor: Actor,
   ): Promise<string[]> {
-    const ids: string[] = []
+    if (orders.length === 0) return []
 
-    for (const data of orders) {
-      const orderNumber = generateOrderNumber()
+    const preparedOrders = orders.map((data) => ({
+      data,
+      ref: doc(collection(db, COLLECTIONS.orders)),
+      orderNumber: generateOrderNumber(),
+      initialTimelineEntry: createTimelineEntry(
+        'pending',
+        actor.id,
+        'Order placed',
+      ),
+    }))
 
-      const initialTimelineEntry =
-        createTimelineEntry(
-          'pending',
-          actor.id,
-          'Order placed',
+    const requestedByProduct = new Map<string, number>()
+
+    for (const { data } of preparedOrders) {
+      if (data.items.length === 0) throw inventoryError()
+
+      for (const item of data.items) {
+        if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
+          throw inventoryError()
+        }
+
+        requestedByProduct.set(
+          item.productId,
+          (requestedByProduct.get(item.productId) ?? 0) + item.quantity,
         )
+      }
+    }
 
-      const id = await createDocument<Order>(
-        COLLECTIONS.orders,
-        {
-          ...data,
-          orderNumber,
+    const productRefs = new Map(
+      [...requestedByProduct.keys()].map((productId) => [
+        productId,
+        doc(db, COLLECTIONS.products, productId),
+      ]),
+    )
+
+    await runTransaction(db, async (transaction) => {
+      // All authoritative reads happen before writes. Firestore retries this
+      // callback when a concurrent checkout changes any product snapshot.
+      const currentProducts = new Map<string, Product>()
+
+      for (const [productId, productRef] of productRefs) {
+        const snapshot = await transaction.get(productRef)
+
+        if (!snapshot.exists()) throw inventoryError()
+
+        currentProducts.set(productId, {
+          id: snapshot.id,
+          ...snapshot.data(),
+        } as Product)
+      }
+
+      for (const { data } of preparedOrders) {
+        for (const item of data.items) {
+          const product = currentProducts.get(item.productId)
+
+          if (
+            !product ||
+            product.status !== 'approved' ||
+            product.storeId !== data.storeId ||
+            product.merchantId !== data.merchantId ||
+            item.quantity < (product.minOrderQty ?? 1) ||
+            item.quantity > (product.maxOrderQty ?? Number.POSITIVE_INFINITY)
+          ) {
+            throw inventoryError()
+          }
+        }
+      }
+
+      for (const [productId, requestedQuantity] of requestedByProduct) {
+        const product = currentProducts.get(productId)
+
+        if (
+          !product ||
+          !Number.isSafeInteger(product.stock) ||
+          product.stock < requestedQuantity
+        ) {
+          throw inventoryError()
+        }
+      }
+
+      for (const prepared of preparedOrders) {
+        transaction.set(prepared.ref, {
+          ...stripUndefined(
+            prepared.data as unknown as Record<string, unknown>,
+          ),
+          orderNumber: prepared.orderNumber,
           status: 'pending',
           cashReceived: false,
-          timeline: [initialTimelineEntry],
-        } as Omit<
-          Order,
-          'id' | 'createdAt' | 'updatedAt'
-        >,
-      )
+          timeline: [prepared.initialTimelineEntry],
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+      }
 
+      for (const [productId, requestedQuantity] of requestedByProduct) {
+        const product = currentProducts.get(productId)!
+
+        transaction.update(productRefs.get(productId)!, {
+          stock: product.stock - requestedQuantity,
+          soldCount: product.soldCount + requestedQuantity,
+          updatedAt: serverTimestamp(),
+        })
+      }
+    })
+
+    const ids: string[] = []
+
+    for (const { data, ref, orderNumber } of preparedOrders) {
+      const id = ref.id
       ids.push(id)
 
       // Best-effort side effects:
       // order placement must not fail if one of these fails.
       await Promise.allSettled([
-        ...data.items.map((item) =>
-          updateDocument(
-            COLLECTIONS.products,
-            item.productId,
-            {
-              stock: increment(
-                -item.quantity,
-              ),
-              soldCount: increment(
-                item.quantity,
-              ),
-            },
-          ),
-        ),
-
         activityService.log(
           actor,
           'order.placed',
