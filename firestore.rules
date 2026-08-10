@@ -20,6 +20,14 @@ service cloud.firestore {
       return /databases/$(database)/documents/products/$(productId);
     }
 
+    function reviewPath(reviewId) {
+      return /databases/$(database)/documents/reviews/$(reviewId);
+    }
+
+    function helpfulVotePath(reviewId, uid) {
+      return /databases/$(database)/documents/reviews/$(reviewId)/helpfulVotes/$(uid);
+    }
+
     function currentUserExists() {
       return signedIn() && exists(userPath(request.auth.uid));
     }
@@ -73,15 +81,74 @@ service cloud.firestore {
       ];
     }
 
-    function validReviewCreate() {
+    function validProductAggregate(data) {
+      return data.ratingCount is int
+        && data.ratingCount >= 0
+        && data.ratingSum is int
+        && data.ratingSum >= 0
+        && data.ratingSum <= data.ratingCount * 5
+        && ((data.ratingCount == 0
+              && data.ratingSum == 0
+              && data.rating == 0)
+            || (data.ratingCount > 0
+              && data.rating * data.ratingCount == data.ratingSum));
+    }
+
+    function aggregateFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'rating', 'ratingCount', 'ratingSum', 'ratingReviewId',
+        'ratingReviewVersion'
+      ]);
+    }
+
+    function validProductAggregateTransition(productId) {
+      let reviewId = request.resource.data.ratingReviewId;
+      let existedBefore = exists(reviewPath(reviewId));
+      let existsAfterWrite = existsAfter(reviewPath(reviewId));
+      let contributedBefore = existedBefore
+        && get(reviewPath(reviewId)).data.productId == productId
+        && get(reviewPath(reviewId)).data.status == 'approved';
+      let contributesAfter = existsAfterWrite
+        && getAfter(reviewPath(reviewId)).data.productId == productId
+        && getAfter(reviewPath(reviewId)).data.status == 'approved';
+      return signedIn()
+        && reviewId is string
+        && validProductAggregate(resource.data)
+        && validProductAggregate(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'rating', 'ratingCount', 'ratingSum', 'ratingReviewId',
+          'ratingReviewVersion', 'updatedAt'
+        ])
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.ratingReviewVersion
+             == (contributesAfter
+                  ? getAfter(reviewPath(reviewId)).data.aggregateVersion
+                  : get(reviewPath(reviewId)).data.aggregateVersion + 1)
+        && request.resource.data.ratingSum
+             == resource.data.ratingSum
+                - (contributedBefore ? get(reviewPath(reviewId)).data.rating : 0)
+                + (contributesAfter ? getAfter(reviewPath(reviewId)).data.rating : 0)
+        && request.resource.data.ratingCount
+             == resource.data.ratingCount
+                - (contributedBefore ? 1 : 0)
+                + (contributesAfter ? 1 : 0);
+    }
+
+    function aggregatePointerMatches(reviewId, productId, version) {
+      return getAfter(productPath(productId)).data.ratingReviewId == reviewId
+        && getAfter(productPath(productId)).data.ratingReviewVersion == version;
+    }
+
+    function validReviewCreate(reviewId) {
       return request.resource.data.keys().hasAll([
           'productId', 'storeId', 'customerId', 'customerName', 'rating',
-          'comment', 'status', 'helpfulCount', 'createdAt', 'updatedAt'
+          'comment', 'status', 'helpfulCount', 'aggregateVersion',
+          'createdAt', 'updatedAt'
         ])
         && request.resource.data.keys().hasOnly([
           'productId', 'storeId', 'customerId', 'customerName', 'rating',
           'title', 'comment', 'images', 'status', 'helpfulCount',
-          'createdAt', 'updatedAt'
+          'aggregateVersion', 'createdAt', 'updatedAt'
         ])
         && request.resource.data.productId is string
         && request.resource.data.storeId is string
@@ -103,12 +170,18 @@ service cloud.firestore {
                 && request.resource.data.images.size() <= 4))
         && request.resource.data.status == 'approved'
         && request.resource.data.helpfulCount == 0
+        && request.resource.data.aggregateVersion == 1
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time
         && exists(productPath(request.resource.data.productId))
         && get(productPath(request.resource.data.productId)).data.status == 'approved'
         && get(productPath(request.resource.data.productId)).data.storeId
-             == request.resource.data.storeId;
+             == request.resource.data.storeId
+        && aggregatePointerMatches(
+             reviewId,
+             request.resource.data.productId,
+             1
+           );
     }
 
     function validReviewReply(reply) {
@@ -121,16 +194,15 @@ service cloud.firestore {
         && reply.at is int;
     }
 
-    function validMerchantReviewUpdate() {
+    function validMerchantReviewUpdate(reviewId) {
       return signedIn()
         && ownsStore(resource.data.storeId)
         && request.resource.data.updatedAt == request.time
         && (
           (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-              'status', 'updatedAt'
+              'status', 'aggregateVersion', 'updatedAt'
             ])
-            && request.resource.data.status != resource.data.status
-            && request.resource.data.status in ['approved', 'hidden', 'rejected'])
+            && validReviewStatusUpdate(reviewId))
           || (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'reply', 'updatedAt'
             ])
@@ -138,7 +210,7 @@ service cloud.firestore {
         );
     }
 
-    function validReviewInteraction() {
+    function validReviewInteraction(reviewId) {
       return signedIn()
         && resource.data.status == 'approved'
         && request.resource.data.updatedAt == request.time
@@ -147,7 +219,13 @@ service cloud.firestore {
               'helpfulCount', 'updatedAt'
             ])
             && request.resource.data.helpfulCount is int
-            && request.resource.data.helpfulCount == resource.data.helpfulCount + 1)
+            && request.resource.data.helpfulCount == resource.data.helpfulCount + 1
+            && !exists(helpfulVotePath(reviewId, request.auth.uid))
+            && existsAfter(helpfulVotePath(reviewId, request.auth.uid))
+            && getAfter(helpfulVotePath(reviewId, request.auth.uid)).data.userId
+                 == request.auth.uid
+            && getAfter(helpfulVotePath(reviewId, request.auth.uid)).data.reviewId
+                 == reviewId)
           || (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'reported', 'updatedAt'
             ])
@@ -155,6 +233,38 @@ service cloud.firestore {
                 || resource.data.reported != true)
             && request.resource.data.reported == true)
         );
+    }
+
+    function validReviewStatusUpdate(reviewId) {
+      return request.resource.data.status != resource.data.status
+        && request.resource.data.status in ['approved', 'hidden', 'rejected']
+        && ((resource.data.status != 'approved'
+              && request.resource.data.status != 'approved'
+              && request.resource.data.aggregateVersion == resource.data.aggregateVersion)
+            || (request.resource.data.aggregateVersion == resource.data.aggregateVersion + 1
+              && aggregatePointerMatches(
+                   reviewId,
+                   resource.data.productId,
+                   request.resource.data.aggregateVersion
+                 )));
+    }
+
+    function validAdminReviewUpdate(reviewId) {
+      return isAdmin()
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'aggregateVersion', 'updatedAt'
+        ])
+        && validReviewStatusUpdate(reviewId);
+    }
+
+    function validReviewDelete(reviewId) {
+      return resource.data.status != 'approved'
+        || aggregatePointerMatches(
+             reviewId,
+             resource.data.productId,
+             resource.data.aggregateVersion + 1
+           );
     }
 
     // -------------------------------------------------------------- users
@@ -229,10 +339,19 @@ service cloud.firestore {
         && request.resource.data.status in ['draft', 'pending']
         && request.resource.data.rating == 0
         && request.resource.data.ratingCount == 0
+        && request.resource.data.ratingSum == 0
         && request.resource.data.soldCount == 0
         && request.resource.data.viewCount == 0;
 
-      allow update: if isAdmin()
+      allow update: if (request.resource.data.diff(resource.data).affectedKeys().hasAny([
+              'rating', 'ratingCount', 'ratingSum'
+            ])
+            && request.resource.data.keys().hasAll([
+              'ratingReviewId', 'ratingReviewVersion'
+            ])
+            && validProductAggregateTransition(productId))
+
+        || (isAdmin() && aggregateFieldsUnchanged())
 
         // Merchant edits own product without changing ownership.
         || (isMerchant()
@@ -240,6 +359,7 @@ service cloud.firestore {
             && request.resource.data.merchantId == resource.data.merchantId
             && request.resource.data.storeId == resource.data.storeId
             && request.resource.data.createdAt == resource.data.createdAt
+            && aggregateFieldsUnchanged()
             && (request.resource.data.status != 'approved'
                 || resource.data.status == 'approved'))
 
@@ -267,15 +387,7 @@ service cloud.firestore {
             && request.resource.data.soldCount >= 0
             && request.resource.data.soldCount < resource.data.soldCount
             && request.resource.data.stock - resource.data.stock
-               == resource.data.soldCount - request.resource.data.soldCount)
-
-        // Current client-side review aggregate update.
-        || (signedIn()
-            && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['rating', 'ratingCount', 'updatedAt'])
-            && request.resource.data.rating >= 0
-            && request.resource.data.rating <= 5
-            && request.resource.data.ratingCount >= resource.data.ratingCount);
+               == resource.data.soldCount - request.resource.data.soldCount);
 
       allow delete: if isAdmin()
         || (isMerchant() && resource.data.merchantId == request.auth.uid);
@@ -367,16 +479,38 @@ service cloud.firestore {
       // The storefront publishes customer reviews immediately. Identity,
       // moderation, reply, verification, counters, and timestamps cannot be
       // supplied outside that exact client workflow.
-      allow create: if isCustomer() && validReviewCreate();
+      allow create: if isCustomer() && validReviewCreate(id);
 
       // There is no author editing workflow. Store owners may only moderate
       // or reply, while signed-in storefront users retain helpful/report.
-      allow update: if isAdmin()
-        || validMerchantReviewUpdate()
-        || validReviewInteraction();
+      allow update: if validAdminReviewUpdate(id)
+        || validMerchantReviewUpdate(id)
+        || validReviewInteraction(id);
 
       // Review deletion is an admin-only moderation action.
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() && validReviewDelete(id);
+
+      match /helpfulVotes/{uid} {
+        allow read: if isSelf(uid);
+
+        allow create: if isSelf(uid)
+          && request.resource.data.keys().hasAll([
+            'reviewId', 'userId', 'createdAt'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'reviewId', 'userId', 'createdAt'
+          ])
+          && request.resource.data.reviewId == id
+          && request.resource.data.userId == uid
+          && request.resource.data.createdAt == request.time
+          && exists(reviewPath(id))
+          && get(reviewPath(id)).data.status == 'approved'
+          && getAfter(reviewPath(id)).data.helpfulCount
+               == get(reviewPath(id)).data.helpfulCount + 1;
+
+        // Helpful is intentionally a one-way action in the current product UI.
+        allow update, delete: if false;
+      }
     }
 
     // ------------------------------------------------- coupons & promotions

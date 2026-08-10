@@ -160,6 +160,9 @@ export interface Product {
   flashSale?: { active: boolean; endsAt: number; salePrice: number } | null
   rating: number
   ratingCount: number
+  ratingSum: number
+  ratingReviewId?: string
+  ratingReviewVersion?: number
   soldCount: number
   viewCount: number
   seo?: { title?: string; description?: string }
@@ -272,6 +275,7 @@ export interface Review {
   comment: string
   images?: string[]
   status: 'pending' | 'approved' | 'rejected' | 'hidden'
+  aggregateVersion: number
   reply?: { text: string; at: number }
   helpfulCount: number
   reported?: boolean

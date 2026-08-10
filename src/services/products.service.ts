@@ -164,13 +164,14 @@ async getBySlug(slug: string) {
     return queryDocs<Product>(COLLECTIONS.products, ...constraints)
   },
 
-  async create(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'rating' | 'ratingCount' | 'soldCount' | 'viewCount' | 'slug'>) {
+  async create(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'rating' | 'ratingCount' | 'ratingSum' | 'ratingReviewId' | 'ratingReviewVersion' | 'soldCount' | 'viewCount' | 'slug'>) {
     const slug = `${slugify(data.name)}-${Math.random().toString(36).slice(2, 7)}`
     return createDocument<Product>(COLLECTIONS.products, {
       ...data,
       slug,
       rating: 0,
       ratingCount: 0,
+      ratingSum: 0,
       soldCount: 0,
       viewCount: 0,
     } as Omit<Product, 'id' | 'createdAt' | 'updatedAt'>)

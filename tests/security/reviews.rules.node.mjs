@@ -15,6 +15,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore'
 
 const PROJECT_ID = 'demo-vendora-e2e'
@@ -42,6 +43,7 @@ function review(overrides = {}) {
     images: ['http://127.0.0.1:9199/review.png'],
     status: 'approved',
     helpfulCount: 0,
+    aggregateVersion: 1,
     createdAt: FIXED_TIME,
     updatedAt: FIXED_TIME,
     ...overrides,
@@ -60,6 +62,7 @@ function createPayload(overrides = {}) {
     images: ['http://127.0.0.1:9199/review.png'],
     status: 'approved',
     helpfulCount: 0,
+    aggregateVersion: 1,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     ...overrides,
@@ -80,14 +83,44 @@ async function seedFirestore() {
       setDoc(doc(db, 'products/product-owned'), {
         storeId: 'store-owned',
         status: 'approved',
+        rating: 5,
+        ratingCount: 5,
+        ratingSum: 25,
       }),
       setDoc(doc(db, 'products/product-foreign'), {
         storeId: 'store-foreign',
         status: 'approved',
+        rating: 5,
+        ratingCount: 1,
+        ratingSum: 5,
       }),
       setDoc(doc(db, 'products/product-draft'), {
         storeId: 'store-owned',
         status: 'draft',
+        rating: 0,
+        ratingCount: 0,
+        ratingSum: 0,
+      }),
+      setDoc(doc(db, 'products/product-helpful'), {
+        storeId: 'store-owned',
+        status: 'approved',
+        rating: 5,
+        ratingCount: 2,
+        ratingSum: 10,
+      }),
+      setDoc(doc(db, 'products/product-integrity'), {
+        storeId: 'store-owned',
+        status: 'approved',
+        rating: 0,
+        ratingCount: 0,
+        ratingSum: 0,
+      }),
+      setDoc(doc(db, 'products/product-create'), {
+        storeId: 'store-owned',
+        status: 'approved',
+        rating: 0,
+        ratingCount: 0,
+        ratingSum: 0,
       }),
       setDoc(doc(db, 'reviews/approved'), review()),
       setDoc(doc(db, 'reviews/hidden'), review({ status: 'hidden' })),
@@ -105,10 +138,84 @@ async function seedFirestore() {
         }),
       ),
       setDoc(doc(db, 'reviews/admin-delete'), review({ status: 'hidden' })),
+      setDoc(doc(db, 'reviews/helpful-a'), review({ productId: 'product-helpful' })),
+      setDoc(doc(db, 'reviews/helpful-b'), review({ productId: 'product-helpful' })),
     ]
 
     await Promise.all(writes)
   })
+}
+
+function aggregateUpdate({ ratingSum, ratingCount }, reviewId, ratingReviewVersion = 1) {
+  return {
+    rating: ratingCount > 0 ? ratingSum / ratingCount : 0,
+    ratingCount,
+    ratingSum,
+    ratingReviewId: reviewId,
+    ratingReviewVersion,
+    updatedAt: serverTimestamp(),
+  }
+}
+
+async function createApprovedReview(db, id, payload, aggregate) {
+  const batch = writeBatch(db)
+  batch.set(doc(db, 'reviews', id), payload)
+  batch.update(
+    doc(db, 'products', payload.productId),
+    aggregateUpdate(
+      {
+        ratingSum: aggregate.ratingSum + payload.rating,
+        ratingCount: aggregate.ratingCount + 1,
+      },
+      id,
+    ),
+  )
+  await batch.commit()
+}
+
+async function setReviewStatus(
+  db,
+  id,
+  status,
+  productId,
+  aggregate,
+  rating,
+  aggregateVersion,
+) {
+  const direction = status === 'approved' ? 1 : -1
+  const batch = writeBatch(db)
+  batch.update(doc(db, 'reviews', id), {
+    status,
+    aggregateVersion,
+    updatedAt: serverTimestamp(),
+  })
+  batch.update(
+    doc(db, 'products', productId),
+    aggregateUpdate(
+      {
+        ratingSum: aggregate.ratingSum + direction * rating,
+        ratingCount: aggregate.ratingCount + direction,
+      },
+      id,
+      aggregateVersion,
+    ),
+  )
+  await batch.commit()
+}
+
+async function helpfulVote(db, reviewId, uid, nextCount, overrides = {}) {
+  const batch = writeBatch(db)
+  batch.set(doc(db, `reviews/${reviewId}/helpfulVotes/${uid}`), {
+    reviewId,
+    userId: uid,
+    createdAt: serverTimestamp(),
+    ...overrides,
+  })
+  batch.update(doc(db, 'reviews', reviewId), {
+    helpfulCount: nextCount,
+    updatedAt: serverTimestamp(),
+  })
+  await batch.commit()
 }
 
 before(async () => {
@@ -164,7 +271,17 @@ test('authors and owning merchants retain legitimate non-public visibility', asy
 })
 
 test('an authenticated customer can create the exact storefront review payload', async () => {
-  await assertSucceeds(setDoc(doc(customerDb, 'reviews/customer-valid'), createPayload()))
+  await assertSucceeds(
+    createApprovedReview(
+      customerDb,
+      'customer-valid',
+      createPayload({ productId: 'product-create' }),
+      {
+      ratingSum: 0,
+      ratingCount: 0,
+      },
+    ),
+  )
 })
 
 test('customers cannot forge customerId or a product/store relationship', async () => {
@@ -239,10 +356,15 @@ test('owning merchants can reply and moderate using only the supported fields', 
     }),
   )
   await assertSucceeds(
-    updateDoc(doc(merchantDb, 'reviews/merchant-status'), {
-      status: 'hidden',
-      updatedAt: serverTimestamp(),
-    }),
+    setReviewStatus(
+      merchantDb,
+      'merchant-status',
+      'hidden',
+      'product-owned',
+      { ratingSum: 25, ratingCount: 5 },
+      5,
+      2,
+    ),
   )
   await assertSucceeds(
     updateDoc(doc(merchantDb, 'reviews/merchant-status'), {
@@ -251,10 +373,15 @@ test('owning merchants can reply and moderate using only the supported fields', 
     }),
   )
   await assertSucceeds(
-    updateDoc(doc(merchantDb, 'reviews/merchant-status'), {
-      status: 'approved',
-      updatedAt: serverTimestamp(),
-    }),
+    setReviewStatus(
+      merchantDb,
+      'merchant-status',
+      'approved',
+      'product-owned',
+      { ratingSum: 20, ratingCount: 4 },
+      5,
+      3,
+    ),
   )
 })
 
@@ -297,22 +424,10 @@ test('merchants cannot modify or delete reviews belonging to another store', asy
   await assertFails(deleteDoc(doc(merchantDb, 'reviews/approved')))
 })
 
-test('signed-in storefront users retain constrained helpful and report operations', async () => {
-  await assertSucceeds(
-    updateDoc(doc(otherCustomerDb, 'reviews/interactions'), {
-      helpfulCount: 1,
-      updatedAt: serverTimestamp(),
-    }),
-  )
+test('signed-in storefront users retain the constrained report operation', async () => {
   await assertSucceeds(
     updateDoc(doc(otherCustomerDb, 'reviews/interactions'), {
       reported: true,
-      updatedAt: serverTimestamp(),
-    }),
-  )
-  await assertFails(
-    updateDoc(doc(otherCustomerDb, 'reviews/interactions'), {
-      helpfulCount: 50,
       updatedAt: serverTimestamp(),
     }),
   )
@@ -324,12 +439,181 @@ test('signed-in storefront users retain constrained helpful and report operation
   )
 })
 
-test('admin can moderate any review and is the only role that can delete', async () => {
-  await assertSucceeds(
-    updateDoc(doc(adminDb, 'reviews/foreign'), {
-      status: 'hidden',
+test('helpful votes enforce one authenticated user per review and reject forgery', async () => {
+  await assertFails(
+    updateDoc(doc(customerDb, 'reviews/helpful-a'), {
+      helpfulCount: 1,
       updatedAt: serverTimestamp(),
     }),
+  )
+
+  await assertFails(helpfulVote(anonymousDb, 'helpful-a', 'customer-1', 1))
+  await assertSucceeds(helpfulVote(otherCustomerDb, 'helpful-a', 'customer-2', 1))
+
+  let reviewSnapshot = await getDoc(doc(customerDb, 'reviews/helpful-a'))
+  assert.equal(reviewSnapshot.data().helpfulCount, 1)
+
+  await assertFails(helpfulVote(otherCustomerDb, 'helpful-a', 'customer-2', 2))
+  reviewSnapshot = await getDoc(doc(customerDb, 'reviews/helpful-a'))
+  assert.equal(reviewSnapshot.data().helpfulCount, 1)
+
+  await assertSucceeds(helpfulVote(customerDb, 'helpful-a', 'customer-1', 2))
+  reviewSnapshot = await getDoc(doc(customerDb, 'reviews/helpful-a'))
+  assert.equal(reviewSnapshot.data().helpfulCount, 2)
+
+  await assertFails(helpfulVote(customerDb, 'helpful-b', 'customer-2', 1))
+  await assertFails(
+    helpfulVote(customerDb, 'helpful-b', 'customer-1', 1, { reviewId: 'helpful-a' }),
+  )
+
+  const removal = writeBatch(otherCustomerDb)
+  removal.delete(doc(otherCustomerDb, 'reviews/helpful-a/helpfulVotes/customer-2'))
+  removal.update(doc(otherCustomerDb, 'reviews/helpful-a'), {
+    helpfulCount: 1,
+    updatedAt: serverTimestamp(),
+  })
+  await assertFails(removal.commit())
+
+  await assertFails(
+    updateDoc(doc(adminDb, 'reviews/helpful-a'), {
+      helpfulCount: 99,
+      updatedAt: serverTimestamp(),
+    }),
+  )
+})
+
+test('approved-review lifecycle atomically maintains a tamper-resistant product aggregate', async () => {
+  const productRef = doc(customerDb, 'products/product-integrity')
+  const firstId = 'integrity-first'
+  const secondId = 'integrity-second'
+
+  const readAggregate = async () => {
+    const snapshot = await getDoc(productRef)
+    return {
+      rating: snapshot.data().rating,
+      ratingCount: snapshot.data().ratingCount,
+      ratingSum: snapshot.data().ratingSum,
+    }
+  }
+
+  await assertFails(
+    updateDoc(productRef, {
+      rating: 5,
+      ratingCount: 999,
+      ratingSum: 4995,
+      updatedAt: serverTimestamp(),
+    }),
+  )
+  await assertFails(
+    updateDoc(doc(adminDb, 'products/product-integrity'), {
+      rating: 5,
+      ratingCount: 999,
+      ratingSum: 4995,
+      updatedAt: serverTimestamp(),
+    }),
+  )
+
+  const firstPayload = createPayload({
+    productId: 'product-integrity',
+    rating: 5,
+    title: 'First aggregate review',
+  })
+  await assertSucceeds(
+    createApprovedReview(customerDb, firstId, firstPayload, {
+      ratingSum: 0,
+      ratingCount: 0,
+    }),
+  )
+  assert.deepEqual(await readAggregate(), { rating: 5, ratingCount: 1, ratingSum: 5 })
+
+  await assertFails(
+    createApprovedReview(customerDb, firstId, firstPayload, {
+      ratingSum: 5,
+      ratingCount: 1,
+    }),
+  )
+  assert.deepEqual(await readAggregate(), { rating: 5, ratingCount: 1, ratingSum: 5 })
+
+  const secondPayload = createPayload({
+    productId: 'product-integrity',
+    rating: 4,
+    title: 'Second aggregate review',
+  })
+  await assertSucceeds(
+    createApprovedReview(customerDb, secondId, secondPayload, {
+      ratingSum: 5,
+      ratingCount: 1,
+    }),
+  )
+  assert.deepEqual(await readAggregate(), { rating: 4.5, ratingCount: 2, ratingSum: 9 })
+
+  await assertSucceeds(
+    setReviewStatus(
+      merchantDb,
+      secondId,
+      'hidden',
+      'product-integrity',
+      { ratingSum: 9, ratingCount: 2 },
+      4,
+      2,
+    ),
+  )
+  assert.deepEqual(await readAggregate(), { rating: 5, ratingCount: 1, ratingSum: 5 })
+
+  await assertSucceeds(
+    updateDoc(doc(merchantDb, 'reviews', secondId), {
+      status: 'rejected',
+      updatedAt: serverTimestamp(),
+    }),
+  )
+  assert.deepEqual(await readAggregate(), { rating: 5, ratingCount: 1, ratingSum: 5 })
+
+  await assertSucceeds(
+    setReviewStatus(
+      adminDb,
+      secondId,
+      'approved',
+      'product-integrity',
+      { ratingSum: 5, ratingCount: 1 },
+      4,
+      3,
+    ),
+  )
+  assert.deepEqual(await readAggregate(), { rating: 4.5, ratingCount: 2, ratingSum: 9 })
+
+  const deletion = writeBatch(adminDb)
+  deletion.delete(doc(adminDb, 'reviews', firstId))
+  deletion.update(
+    doc(adminDb, 'products/product-integrity'),
+    aggregateUpdate({ ratingSum: 4, ratingCount: 1 }, firstId, 2),
+  )
+  await assertSucceeds(deletion.commit())
+  assert.deepEqual(await readAggregate(), { rating: 4, ratingCount: 1, ratingSum: 4 })
+
+  const forgedTransition = writeBatch(customerDb)
+  forgedTransition.set(
+    doc(customerDb, 'reviews/integrity-forged'),
+    createPayload({ productId: 'product-integrity', rating: 1 }),
+  )
+  forgedTransition.update(
+    productRef,
+    aggregateUpdate({ ratingSum: 999, ratingCount: 2 }, 'integrity-forged'),
+  )
+  await assertFails(forgedTransition.commit())
+  assert.deepEqual(await readAggregate(), { rating: 4, ratingCount: 1, ratingSum: 4 })
+})
+
+test('admin can moderate any review and is the only role that can delete', async () => {
+  await assertSucceeds(
+    setReviewStatus(
+      adminDb,
+      'foreign',
+      'hidden',
+      'product-foreign',
+      { ratingSum: 5, ratingCount: 1 },
+      5,
+      2,
+    ),
   )
   await assertSucceeds(deleteDoc(doc(adminDb, 'reviews/admin-delete')))
   const deleted = await assertSucceeds(getDoc(doc(adminDb, 'reviews/admin-delete')))
@@ -341,10 +625,15 @@ test('public visibility tracks approved, hidden, rejected, and reapproved transi
   await assertSucceeds(getDoc(lifecycleRef))
 
   await assertSucceeds(
-    updateDoc(doc(merchantDb, 'reviews/lifecycle'), {
-      status: 'hidden',
-      updatedAt: serverTimestamp(),
-    }),
+    setReviewStatus(
+      merchantDb,
+      'lifecycle',
+      'hidden',
+      'product-owned',
+      { ratingSum: 25, ratingCount: 5 },
+      5,
+      2,
+    ),
   )
   await assertFails(getDoc(lifecycleRef))
 
@@ -357,10 +646,15 @@ test('public visibility tracks approved, hidden, rejected, and reapproved transi
   await assertFails(getDoc(lifecycleRef))
 
   await assertSucceeds(
-    updateDoc(doc(merchantDb, 'reviews/lifecycle'), {
-      status: 'approved',
-      updatedAt: serverTimestamp(),
-    }),
+    setReviewStatus(
+      merchantDb,
+      'lifecycle',
+      'approved',
+      'product-owned',
+      { ratingSum: 20, ratingCount: 4 },
+      5,
+      3,
+    ),
   )
   await assertSucceeds(getDoc(lifecycleRef))
 })

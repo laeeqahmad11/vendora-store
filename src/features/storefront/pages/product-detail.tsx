@@ -320,6 +320,7 @@ function ReviewCard({
   review: Review
 }) {
   const queryClient = useQueryClient()
+  const { firebaseUser } = useAuthStore()
 
   const [voted, setVoted] =
     React.useState(false)
@@ -327,10 +328,13 @@ function ReviewCard({
     React.useState(false)
 
   const helpful = useMutation({
-    mutationFn: () =>
-      reviewsService.markHelpful(
-        review.id,
-      ),
+    mutationFn: () => {
+      if (!firebaseUser) {
+        throw new Error('Sign in to mark reviews as helpful.')
+      }
+
+      return reviewsService.markHelpful(review.id, firebaseUser.uid)
+    },
 
     onSuccess: () => {
       setVoted(true)
@@ -342,6 +346,8 @@ function ReviewCard({
         ],
       })
     },
+
+    onError: (error) => toast.error(getErrorMessage(error)),
   })
 
   const report = useMutation({
@@ -442,10 +448,7 @@ function ReviewCard({
           )}
         >
           <ThumbsUp className="size-3.5" />
-          Helpful (
-          {review.helpfulCount +
-            (voted ? 1 : 0)}
-          )
+          Helpful ({review.helpfulCount})
         </button>
 
         <button
