@@ -20,7 +20,7 @@ const PROJECT_ID = 'demo-vendora-e2e'
 const HOST = '127.0.0.1'
 const BASE_URL = `http://${HOST}:5173`
 const BUILD_DIRECTORY = path.join(repositoryRoot, '.firebase', 'e2e-build', mode)
-const FIREBASE_PORTS = [4400, 4500, 8080, 9099, 9150, 9199]
+const FIREBASE_PORTS = [4400, 4500, 5001, 8080, 9099, 9150, 9199]
 const MANAGED_PORTS = mode === 'authenticated' ? [5173, ...FIREBASE_PORTS] : [5173]
 const children = new Set()
 let cleaningUp = false
@@ -220,7 +220,7 @@ async function waitForEmulators(child) {
       })
       if (!response.ok) return false
       const running = await response.json()
-      const registered = ['auth', 'firestore', 'storage'].every(
+      const registered = ['auth', 'firestore', 'functions', 'storage'].every(
         (name) => running[name]?.host === HOST && Number(running[name]?.port) > 0,
       )
       if (!registered) return false
@@ -343,7 +343,7 @@ async function run() {
           '--project',
           PROJECT_ID,
           '--only',
-          'auth,firestore,storage',
+          'auth,firestore,functions,storage',
         ],
         { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] },
       )

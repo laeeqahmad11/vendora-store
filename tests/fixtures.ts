@@ -12,6 +12,7 @@ export async function installNetworkPolicy(
     allowedOrigins.add('http://127.0.0.1:9099')
     allowedOrigins.add('http://127.0.0.1:8080')
     allowedOrigins.add('http://127.0.0.1:9199')
+    allowedOrigins.add('http://127.0.0.1:5001')
   }
 
   const allowedHosts = [...allowedOrigins]

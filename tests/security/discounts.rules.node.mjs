@@ -230,14 +230,13 @@ async function redeemSecureCoupon(usageId, orderId) {
   })
 }
 
-test('one atomic legitimate redemption succeeds and replay is denied', async () => {
-  await assertSucceeds(redeemSecureCoupon('usage-1', 'secure-order-1'))
-  assert.equal((await getDoc(doc(customerDb, 'coupons/secure-coupon'))).data().usedCount, 1)
+test('even an internally consistent linked redemption is denied to customers', async () => {
+  await assertFails(redeemSecureCoupon('usage-1', 'secure-order-1'))
+  assert.equal((await getDoc(doc(customerDb, 'coupons/secure-coupon'))).data().usedCount, 0)
   assert.equal(
-    (await getDoc(doc(customerDb, 'customerCouponUsages/secure-coupon_customer-1'))).data().count,
-    1,
+    (await getDoc(doc(customerDb, 'customerCouponUsages/secure-coupon_customer-1'))).exists(),
+    false,
   )
-  await assertFails(redeemSecureCoupon('usage-2', 'secure-order-2'))
 })
 
 test('merchants can manage only their own store coupons without forging usage', async () => {

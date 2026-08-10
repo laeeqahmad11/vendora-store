@@ -23,7 +23,7 @@ import { SEO } from '@/components/shared/seo'
 
 import { usersService } from '@/services/users.service'
 import { storesService } from '@/services/stores.service'
-import { ordersService } from '@/services/orders.service'
+import { checkoutService } from '@/services/checkout.service'
 import { discountsService } from '@/services/discounts.service'
 
 import { useAuthStore } from '@/stores/auth-store'
@@ -36,7 +36,7 @@ import {
 
 import { cn, formatCurrency, getErrorMessage } from '@/lib/utils'
 import { allocateCouponDiscount } from '@/lib/coupons'
-import type { CartItem, Order } from '@/types'
+import type { CartItem } from '@/types'
 
 const checkoutSchema = z.object({
   fullName: z.string().min(2, 'Full name is required'),
@@ -84,6 +84,7 @@ export default function CheckoutPage() {
   >(null)
 
   const placedRef = React.useRef(false)
+  const checkoutRequestIdRef = React.useRef(crypto.randomUUID())
 
   React.useEffect(() => {
     if (initialized && !firebaseUser) {
@@ -351,92 +352,26 @@ export default function CheckoutPage() {
         country: values.country,
       }
 
-      const orders: Omit<
-        Order,
-        | 'id'
-        | 'orderNumber'
-        | 'timeline'
-        | 'status'
-        | 'cashReceived'
-        | 'createdAt'
-        | 'updatedAt'
-      >[] = groups.map((group) => {
-        const store = stores.data?.find(
-          (storeItem) =>
-            storeItem?.id === group.storeId,
-        )
-
-        const discount = discountFor(group)
-        const shippingFee = shippingFor(group)
-
-        return {
-          customerId: firebaseUser.uid,
-          customerName: values.fullName,
-          customerEmail: values.email,
-          customerPhone: values.phone,
-
-          storeId: group.storeId,
-          merchantId: store?.ownerId ?? '',
-
-          storeName:
-            store?.name ??
-            group.items[0]?.storeName ??
-            'Store',
-
-          items: group.items.map((item) => ({
-            productId: item.productId,
-            name: item.name,
-            imageUrl: item.imageUrl,
-            price: item.price,
-            quantity: item.quantity,
-
-            ...(item.variant
-              ? { variant: item.variant }
-              : {}),
-
-            ...(item.variantId
-              ? { variantId: item.variantId }
-              : {}),
-          })),
-
-          subtotal: group.subtotal,
-          discount,
-
-          ...(discount > 0 && coupon?.coupon.code
-            ? { couponCode: coupon.coupon.code }
-            : {}),
-
-          shippingFee,
-          tax: 0,
-
-          total: Math.max(
-            0,
-            group.subtotal - discount + shippingFee,
-          ),
-
-          paymentMethod: 'cod' as const,
-          shippingAddress,
-
-          ...(values.specialInstructions
-            ? {
-                specialInstructions:
-                  values.specialInstructions,
-              }
-            : {}),
-
-          ...(giftNote ? { giftNote } : {}),
-        }
-      })
-
-      const ids = await ordersService.placeOrders(
-        orders,
-        {
-          id: firebaseUser.uid,
-          name: values.fullName,
-          role: 'customer',
+      const result = await checkoutService.placeOrders({
+        items: activeItems.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          ...(item.variantId ? { variantId: item.variantId } : {}),
+        })),
+        delivery: {
+          fullName: values.fullName,
+          email: values.email,
+          phone: values.phone,
+          address: shippingAddress,
         },
-        coupon?.coupon.id,
-      )
+        ...(coupon?.coupon.code ? { couponCode: coupon.coupon.code } : {}),
+        paymentMethod: 'cod',
+        ...(values.specialInstructions
+          ? { specialInstructions: values.specialInstructions }
+          : {}),
+        ...(giftNote ? { giftNote } : {}),
+        idempotencyKey: checkoutRequestIdRef.current,
+      })
 
       if (saveAddress) {
         await usersService
@@ -447,32 +382,17 @@ export default function CheckoutPage() {
           .catch(() => {})
       }
 
-      return {
-        ids,
-        orderNumbers: [] as string[],
-      }
+      return result
     },
 
-    onSuccess: async ({ ids }) => {
+    onSuccess: ({ orderIds, orderNumbers }) => {
       placedRef.current = true
-
-      const created = await Promise.all(
-        ids.map((id) =>
-          ordersService.getById(id).catch(() => null),
-        ),
-      )
-
-      const orderNumbers = created
-        .filter(
-          (order): order is Order => Boolean(order),
-        )
-        .map((order) => order.orderNumber)
 
       clearCart()
 
       navigate('/order-success', {
         state: {
-          orderIds: ids,
+          orderIds,
           orderNumbers,
         },
 
