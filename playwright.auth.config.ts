@@ -103,6 +103,13 @@ export default defineConfig({
       use: { ...sharedUse, storageState: authState('customer') },
     },
     {
+      name: 'discounts-coupons',
+      testMatch: /authenticated\/discounts-coupons\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('customer') },
+    },
+    {
       name: 'merchant-order-fulfillment',
       testMatch: /authenticated\/merchant-order-fulfillment\.spec\.ts/,
       dependencies: ['auth-setup'],

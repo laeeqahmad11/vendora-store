@@ -15,6 +15,7 @@ import {
   NEXT_ORDER_STATUS,
 } from '@/lib/constants'
 import {
+  convertDocTimestamps,
   getDocById,
   queryDocs,
   updateDocument,
@@ -24,11 +25,19 @@ import { notificationsService } from '@/services/notifications.service'
 import { productsService } from '@/services/products.service'
 import { db } from '@/lib/firebase'
 import { generateOrderNumber, stripUndefined } from '@/lib/utils'
+import {
+  allocateCouponDiscount,
+  couponEligibleSubtotal,
+  validateAndCalculateCoupon,
+} from '@/lib/coupons'
 import type {
+  CartItem,
+  Coupon,
   Order,
   OrderStatus,
   OrderTimelineEntry,
   Product,
+  Store,
   UserRole,
 } from '@/types'
 
@@ -43,6 +52,31 @@ const unavailableProductMessage =
 
 function inventoryError(): Error {
   return new Error(unavailableProductMessage)
+}
+
+function checkoutChangedError(): Error {
+  return new Error(
+    'Product pricing, shipping, or promo details changed. Please review your cart and apply the promo code again.',
+  )
+}
+
+const money = (value: number) => Math.round(value * 100) / 100
+
+function currentProductPrice(
+  product: Product,
+  variantId: string | undefined,
+  now: number,
+): number {
+  const variant = variantId
+    ? product.variants?.find((item) => item.id === variantId)
+    : undefined
+
+  if (variantId && !variant) throw inventoryError()
+  if (variant?.price != null) return variant.price
+  if (product.flashSale?.active && product.flashSale.endsAt > now) {
+    return product.flashSale.salePrice
+  }
+  return product.price
 }
 
 /**
@@ -152,6 +186,7 @@ export const ordersService = {
       | 'updatedAt'
     >[],
     actor: Actor,
+    couponId?: string,
   ): Promise<string[]> {
     if (orders.length === 0) return []
 
@@ -189,11 +224,27 @@ export const ordersService = {
         doc(db, COLLECTIONS.products, productId),
       ]),
     )
+    const storeRefs = new Map(
+      preparedOrders.map(({ data }) => [
+        data.storeId,
+        doc(db, COLLECTIONS.stores, data.storeId),
+      ]),
+    )
+    const couponRef = couponId
+      ? doc(db, COLLECTIONS.coupons, couponId)
+      : null
+    const customerCouponUsageRef = couponId
+      ? doc(db, 'customerCouponUsages', `${couponId}_${actor.id}`)
+      : null
+    const couponUsageRef = couponId
+      ? doc(collection(db, 'couponUsages'))
+      : null
 
     await runTransaction(db, async (transaction) => {
       // All authoritative reads happen before writes. Firestore retries this
       // callback when a concurrent checkout changes any product snapshot.
       const currentProducts = new Map<string, Product>()
+      const currentStores = new Map<string, Store>()
 
       for (const [productId, productRef] of productRefs) {
         const snapshot = await transaction.get(productRef)
@@ -206,7 +257,45 @@ export const ordersService = {
         } as Product)
       }
 
+      for (const [storeId, storeRef] of storeRefs) {
+        const snapshot = await transaction.get(storeRef)
+        if (!snapshot.exists()) throw checkoutChangedError()
+        currentStores.set(storeId, {
+          id: snapshot.id,
+          ...convertDocTimestamps(snapshot.data()),
+        } as Store)
+      }
+
+      const couponSnapshot = couponRef
+        ? await transaction.get(couponRef)
+        : null
+      const customerCouponUsageSnapshot = customerCouponUsageRef
+        ? await transaction.get(customerCouponUsageRef)
+        : null
+
+      if (couponRef && !couponSnapshot?.exists()) throw checkoutChangedError()
+
+      const currentCoupon = couponSnapshot?.exists()
+        ? ({
+            id: couponSnapshot.id,
+            ...convertDocTimestamps(couponSnapshot.data()),
+          } as Coupon)
+        : null
+      const customerCouponUsageCount = customerCouponUsageSnapshot?.exists()
+        ? Number(customerCouponUsageSnapshot.data().count)
+        : 0
+      const checkoutTime = Date.now()
+
       for (const { data } of preparedOrders) {
+        const store = currentStores.get(data.storeId)
+        if (
+          !store ||
+          store.status !== 'approved' ||
+          store.ownerId !== data.merchantId
+        ) {
+          throw checkoutChangedError()
+        }
+
         for (const item of data.items) {
           const product = currentProducts.get(item.productId)
 
@@ -220,6 +309,101 @@ export const ordersService = {
           ) {
             throw inventoryError()
           }
+
+
+          if (
+            money(item.price) !==
+            money(currentProductPrice(product, item.variantId, checkoutTime))
+          ) {
+            throw checkoutChangedError()
+          }
+        }
+
+
+        const authoritativeSubtotal = money(
+          data.items.reduce(
+            (sum, item) => sum + item.price * item.quantity,
+            0,
+          ),
+        )
+        const shippingFee =
+          store.shippingEnabled === false
+            ? 0
+            : store.freeShippingThreshold &&
+                authoritativeSubtotal >= store.freeShippingThreshold
+              ? 0
+              : Math.max(0, store.shippingFee ?? 0)
+
+        if (
+          money(data.subtotal) !== authoritativeSubtotal ||
+          money(data.shippingFee) !== money(shippingFee) ||
+          data.tax !== 0
+        ) {
+          throw checkoutChangedError()
+        }
+      }
+
+      const couponGroups = preparedOrders.map(({ data }) => ({
+        storeId: data.storeId,
+        subtotal: data.subtotal,
+        items: data.items.map(
+          (item): CartItem => ({
+            productId: item.productId,
+            storeId: data.storeId,
+            storeName: data.storeName,
+            name: item.name,
+            imageUrl: item.imageUrl,
+            price: item.price,
+            quantity: item.quantity,
+            stock: currentProducts.get(item.productId)!.stock,
+            variantId: item.variantId,
+            variant: item.variant,
+          }),
+        ),
+      }))
+      let couponAllocations = new Map(
+        couponGroups.map((group) => [group.storeId, 0]),
+      )
+      let totalCouponDiscount = 0
+      let couponBasis = 0
+
+      if (currentCoupon) {
+        const validationItems = currentCoupon.storeId
+          ? couponGroups.find(
+              (group) => group.storeId === currentCoupon.storeId,
+            )?.items ?? []
+          : couponGroups.flatMap((group) => group.items)
+
+        totalCouponDiscount = validateAndCalculateCoupon(
+          currentCoupon,
+          validationItems,
+          {
+            now: checkoutTime,
+            storeId: currentCoupon.storeId,
+            customerUsageCount: customerCouponUsageCount,
+          },
+        )
+        couponBasis = couponEligibleSubtotal(currentCoupon, validationItems)
+        couponAllocations = allocateCouponDiscount(
+          currentCoupon,
+          totalCouponDiscount,
+          couponGroups,
+        )
+      }
+
+      for (const { data } of preparedOrders) {
+        const expectedDiscount = couponAllocations.get(data.storeId) ?? 0
+        const expectedTotal = money(
+          data.subtotal - expectedDiscount + data.shippingFee + data.tax,
+        )
+        if (
+          money(data.discount) !== expectedDiscount ||
+          money(data.total) !== expectedTotal ||
+          (expectedDiscount > 0
+            ? data.couponCode !== currentCoupon?.code
+            : Boolean(data.couponCode))
+        ) {
+          throw checkoutChangedError()
         }
       }
 
@@ -236,16 +420,29 @@ export const ordersService = {
       }
 
       for (const prepared of preparedOrders) {
+        const hasCouponDiscount =
+          (couponAllocations.get(prepared.data.storeId) ?? 0) > 0
+        const cleanOrderData = stripUndefined(
+          prepared.data as unknown as Record<string, unknown>,
+        )
+        cleanOrderData.items = prepared.data.items.map((item) =>
+          stripUndefined(item as unknown as Record<string, unknown>),
+        )
         transaction.set(prepared.ref, {
-          ...stripUndefined(
-            prepared.data as unknown as Record<string, unknown>,
-          ),
+          ...cleanOrderData,
           orderNumber: prepared.orderNumber,
           status: 'pending',
           cashReceived: false,
           timeline: [prepared.initialTimelineEntry],
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
+          ...(hasCouponDiscount && currentCoupon && couponUsageRef
+            ? {
+                couponId: currentCoupon.id,
+                couponBasis,
+                couponUsageId: couponUsageRef.id,
+              }
+            : {}),
         })
       }
 
@@ -255,6 +452,48 @@ export const ordersService = {
         transaction.update(productRefs.get(productId)!, {
           stock: product.stock - requestedQuantity,
           soldCount: product.soldCount + requestedQuantity,
+          updatedAt: serverTimestamp(),
+        })
+      }
+
+
+      if (
+        currentCoupon &&
+        couponRef &&
+        couponUsageRef &&
+        customerCouponUsageRef
+      ) {
+        const discountedOrderIds = preparedOrders
+          .filter(
+            ({ data }) => (couponAllocations.get(data.storeId) ?? 0) > 0,
+          )
+          .map(({ ref }) => ref.id)
+
+        if (!discountedOrderIds.length || totalCouponDiscount <= 0) {
+          throw checkoutChangedError()
+        }
+
+        transaction.update(couponRef, {
+          usedCount: currentCoupon.usedCount + 1,
+          updatedAt: serverTimestamp(),
+        })
+        transaction.set(couponUsageRef, {
+          couponId: currentCoupon.id,
+          couponCode: currentCoupon.code,
+          customerId: actor.id,
+          orderIds: discountedOrderIds,
+          discount: totalCouponDiscount,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+        transaction.set(customerCouponUsageRef, {
+          couponId: currentCoupon.id,
+          customerId: actor.id,
+          count: customerCouponUsageCount + 1,
+          lastUsageId: couponUsageRef.id,
+          createdAt: customerCouponUsageSnapshot?.exists()
+            ? customerCouponUsageSnapshot.data().createdAt
+            : serverTimestamp(),
           updatedAt: serverTimestamp(),
         })
       }

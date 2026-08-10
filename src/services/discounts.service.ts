@@ -1,10 +1,4 @@
-import {
-  increment,
-  limit,
-  orderBy,
-  where,
-  type QueryConstraint,
-} from 'firebase/firestore'
+import { limit, orderBy, where, type QueryConstraint } from 'firebase/firestore'
 
 import { COLLECTIONS } from '@/lib/constants'
 import {
@@ -13,6 +7,7 @@ import {
   queryDocs,
   updateDocument,
 } from '@/services/firestore'
+import { validateAndCalculateCoupon } from '@/lib/coupons'
 
 import type {
   CartItem,
@@ -146,212 +141,25 @@ export const discountsService = {
         (item) => !item.storeId,
       )
 
-    if (!coupon || !coupon.active) {
-      throw new Error(
-        'This promo code is not valid.',
-      )
-    }
-
-    const now = Date.now()
-
-    if (
-      coupon.startsAt &&
-      now < coupon.startsAt
-    ) {
-      throw new Error(
-        'This promo code is not active yet.',
-      )
-    }
-
-    if (
-      coupon.expiresAt &&
-      now > coupon.expiresAt
-    ) {
-      throw new Error(
-        'This promo code has expired.',
-      )
-    }
-
-    if (
-      coupon.usageLimit &&
-      coupon.usedCount >= coupon.usageLimit
-    ) {
-      throw new Error(
-        'This promo code has reached its usage limit.',
-      )
-    }
+    if (!coupon) throw new Error('This promo code is not valid.')
 
     /*
      * Check usage by the currently signed-in customer.
      */
-    if (
-      customerId &&
-      coupon.perCustomerLimit
-    ) {
-      const customerUsageCount =
-        await this.getCustomerCouponUsageCount(
-          coupon.id,
-          customerId,
-        )
+    const customerUsageCount =
+      customerId && coupon.perCustomerLimit
+        ? await this.getCustomerCouponUsageCount(coupon.id, customerId)
+        : 0
 
-      if (
-        customerUsageCount >=
-        coupon.perCustomerLimit
-      ) {
-        throw new Error(
-          'You have already reached the usage limit for this promo code.',
-        )
-      }
-    }
-
-    let eligibleItems = items
-
-    if (
-      coupon.appliesTo?.productIds?.length
-    ) {
-      eligibleItems = items.filter((item) =>
-        coupon.appliesTo?.productIds?.includes(
-          item.productId,
-        ),
-      )
-    }
-
-    const eligibleSubtotal =
-      eligibleItems.reduce(
-        (sum, item) =>
-          sum + item.price * item.quantity,
-        0,
-      )
-
-    if (!eligibleSubtotal) {
-      throw new Error(
-        'This promo code does not apply to items in your cart.',
-      )
-    }
-
-    if (
-      coupon.minOrderAmount &&
-      eligibleSubtotal <
-        coupon.minOrderAmount
-    ) {
-      throw new Error(
-        `This code requires a minimum order of ${coupon.minOrderAmount.toFixed(
-          2,
-        )}.`,
-      )
-    }
-
-    let discount = 0
-
-    switch (coupon.type) {
-      case 'percentage':
-        discount =
-          (eligibleSubtotal * coupon.value) /
-          100
-        break
-
-      case 'fixed':
-      case 'first_order':
-        discount = coupon.value
-        break
-
-      case 'bogo': {
-        /*
-         * Current BOGO behaviour:
-         * the cheapest eligible unit is free.
-         */
-        const cheapestEligiblePrice =
-          Math.min(
-            ...eligibleItems.map(
-              (item) => item.price,
-            ),
-          )
-
-        discount = cheapestEligiblePrice
-        break
-      }
-
-      default:
-        discount = 0
-    }
-
-    if (coupon.maxDiscount) {
-      discount = Math.min(
-        discount,
-        coupon.maxDiscount,
-      )
-    }
-
-    discount = Math.min(
-      Math.round(discount * 100) / 100,
-      eligibleSubtotal,
-    )
+    const discount = validateAndCalculateCoupon(coupon, items, {
+      storeId,
+      customerUsageCount,
+    })
 
     return {
       coupon,
       discount,
     }
-  },
-
-  /**
-   * Consumes the coupon after the order was created.
-   *
-   * It:
-   * 1. saves usage against the customer;
-   * 2. increments the coupon's total usedCount.
-   */
-  async consumeCoupon(
-    coupon: Coupon,
-    customerId: string,
-    orderIds: string[],
-  ) {
-    if (!customerId) {
-      throw new Error(
-        'Customer ID is required to record coupon usage.',
-      )
-    }
-
-    /*
-     * Validate the per-customer limit again immediately
-     * before recording usage.
-     */
-    if (coupon.perCustomerLimit) {
-      const customerUsageCount =
-        await this.getCustomerCouponUsageCount(
-          coupon.id,
-          customerId,
-        )
-
-      if (
-        customerUsageCount >=
-        coupon.perCustomerLimit
-      ) {
-        throw new Error(
-          'You have already reached the usage limit for this promo code.',
-        )
-      }
-    }
-
-    await createDocument<CouponUsage>(
-      COUPON_USAGES_COLLECTION,
-      {
-        couponId: coupon.id,
-        couponCode: coupon.code,
-        customerId,
-        orderIds,
-      } as Omit<
-        CouponUsage,
-        'id' | 'createdAt' | 'updatedAt'
-      >,
-    )
-
-    await updateDocument(
-      COLLECTIONS.coupons,
-      coupon.id,
-      {
-        usedCount: increment(1),
-      },
-    )
   },
 
   // ------------------------------------------------------------ promotions

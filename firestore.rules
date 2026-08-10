@@ -20,6 +20,18 @@ service cloud.firestore {
       return /databases/$(database)/documents/products/$(productId);
     }
 
+    function couponPath(couponId) {
+      return /databases/$(database)/documents/coupons/$(couponId);
+    }
+
+    function couponUsagePath(usageId) {
+      return /databases/$(database)/documents/couponUsages/$(usageId);
+    }
+
+    function customerCouponUsagePath(couponId, customerId) {
+      return /databases/$(database)/documents/customerCouponUsages/$(couponId + '_' + customerId);
+    }
+
     function reviewPath(reviewId) {
       return /databases/$(database)/documents/reviews/$(reviewId);
     }
@@ -79,6 +91,113 @@ service cloud.firestore {
         'order_update', 'approval', 'review', 'discount', 'announcement',
         'low_stock', 'message', 'support'
       ];
+    }
+
+    function validCouponDocument(data) {
+      return data.keys().hasAll([
+          'code', 'type', 'value', 'usedCount', 'active', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'storeId', 'code', 'type', 'value', 'minOrderAmount',
+          'maxDiscount', 'usageLimit', 'usedCount', 'perCustomerLimit',
+          'startsAt', 'expiresAt', 'active', 'appliesTo', 'createdAt', 'updatedAt'
+        ])
+        && data.code is string
+        && data.code.size() >= 3
+        && data.code.size() <= 50
+        && data.type in ['percentage', 'fixed', 'bogo', 'first_order']
+        && data.value is number
+        && data.value > 0
+        && (data.type != 'percentage' || data.value <= 100)
+        && data.usedCount is int
+        && data.usedCount >= 0
+        && data.active is bool
+        && (!data.keys().hasAny(['storeId']) || data.storeId is string)
+        && (!data.keys().hasAny(['minOrderAmount'])
+            || (data.minOrderAmount is number && data.minOrderAmount > 0))
+        && (!data.keys().hasAny(['maxDiscount'])
+            || (data.maxDiscount is number && data.maxDiscount > 0))
+        && (!data.keys().hasAny(['usageLimit'])
+            || (data.usageLimit is int && data.usageLimit > 0))
+        && (!data.keys().hasAny(['perCustomerLimit'])
+            || (data.perCustomerLimit is int && data.perCustomerLimit > 0))
+        && (!data.keys().hasAny(['startsAt']) || data.startsAt is number)
+        && (!data.keys().hasAny(['expiresAt']) || data.expiresAt is number)
+        && (!data.keys().hasAny(['startsAt', 'expiresAt'])
+            || !data.keys().hasAll(['startsAt', 'expiresAt'])
+            || data.expiresAt > data.startsAt)
+        && (!data.keys().hasAny(['appliesTo']) || data.appliesTo is map);
+    }
+
+    function couponIsCurrentlyValid(coupon) {
+      return coupon.active == true
+        && (!coupon.keys().hasAny(['startsAt'])
+            || request.time.toMillis() >= coupon.startsAt)
+        && (!coupon.keys().hasAny(['expiresAt'])
+            || request.time.toMillis() <= coupon.expiresAt)
+        && (!coupon.keys().hasAny(['usageLimit'])
+            || coupon.usedCount <= coupon.usageLimit);
+    }
+
+    function validCouponRedemption(couponId) {
+      let counter = getAfter(
+        customerCouponUsagePath(couponId, request.auth.uid)
+      ).data;
+      let usage = getAfter(couponUsagePath(counter.lastUsageId)).data;
+      return isCustomer()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['usedCount', 'updatedAt'])
+        && request.resource.data.usedCount == resource.data.usedCount + 1
+        && request.resource.data.updatedAt == request.time
+        && couponIsCurrentlyValid(request.resource.data)
+        && counter.couponId == couponId
+        && counter.customerId == request.auth.uid
+        && usage.couponId == couponId
+        && usage.customerId == request.auth.uid;
+    }
+
+    function validCouponDiscountBound(coupon) {
+      return request.resource.data.discount <= request.resource.data.subtotal
+        && (!coupon.keys().hasAny(['maxDiscount'])
+            || request.resource.data.discount <= coupon.maxDiscount)
+        && (coupon.type == 'bogo'
+            || ((coupon.type == 'fixed' || coupon.type == 'first_order')
+                && request.resource.data.discount <= coupon.value)
+            || (coupon.type == 'percentage'
+                && request.resource.data.discount
+                   <= request.resource.data.subtotal * coupon.value / 100 + 0.011));
+    }
+
+    function validDiscountedOrder(orderId) {
+      let previousCoupon = get(couponPath(request.resource.data.couponId)).data;
+      let coupon = getAfter(couponPath(request.resource.data.couponId)).data;
+      let usage = getAfter(couponUsagePath(request.resource.data.couponUsageId)).data;
+      let counter = getAfter(
+        customerCouponUsagePath(request.resource.data.couponId, request.auth.uid)
+      ).data;
+      return request.resource.data.couponId is string
+        && request.resource.data.couponBasis is number
+        && request.resource.data.couponBasis > 0
+        && request.resource.data.couponCode is string
+        && request.resource.data.couponUsageId is string
+        && request.resource.data.discount > 0
+        && request.resource.data.couponCode == coupon.code
+        && couponIsCurrentlyValid(coupon)
+        && (!coupon.keys().hasAny(['storeId'])
+            || coupon.storeId == request.resource.data.storeId)
+        && (!coupon.keys().hasAny(['minOrderAmount'])
+            || request.resource.data.couponBasis >= coupon.minOrderAmount)
+        && validCouponDiscountBound(coupon)
+        && coupon.usedCount == previousCoupon.usedCount + 1
+        && usage.couponId == request.resource.data.couponId
+        && usage.couponCode == coupon.code
+        && usage.customerId == request.auth.uid
+        && orderId in usage.orderIds
+        && counter.couponId == request.resource.data.couponId
+        && counter.customerId == request.auth.uid
+        && counter.lastUsageId == request.resource.data.couponUsageId
+        && (!coupon.keys().hasAny(['perCustomerLimit'])
+            || counter.count <= coupon.perCustomerLimit);
     }
 
     function validProfileFields(data) {
@@ -495,7 +614,7 @@ service cloud.firestore {
         || (signedIn() && resource.data.merchantId == request.auth.uid)
         || (signedIn() && ownsStore(resource.data.storeId));
 
-      allow create: if signedIn()
+      allow create: if isCustomer()
         && request.resource.data.customerId == request.auth.uid
         && request.resource.data.paymentMethod == 'cod'
         && request.resource.data.status == 'pending'
@@ -506,7 +625,17 @@ service cloud.firestore {
         && request.resource.data.discount >= 0
         && request.resource.data.shippingFee >= 0
         && request.resource.data.tax >= 0
-        && request.resource.data.total >= 0;
+        && request.resource.data.total >= 0
+        && request.resource.data.total
+           == request.resource.data.subtotal
+              - request.resource.data.discount
+              + request.resource.data.shippingFee
+              + request.resource.data.tax
+        && ((request.resource.data.discount == 0
+             && !request.resource.data.keys().hasAny([
+               'couponId', 'couponCode', 'couponUsageId', 'couponBasis'
+             ]))
+            || validDiscountedOrder(orderId));
 
       allow update: if
         // Merchant fulfilment and cash confirmation fields only.
@@ -611,16 +740,25 @@ service cloud.firestore {
     // ------------------------------------------------- coupons & promotions
     match /coupons/{id} {
       allow read: if true; // codes validated client-side at checkout
-      allow create: if isAdmin() || (isMerchant() && ownsStore(request.resource.data.storeId));
-      allow update: if isAdmin()
+      allow create: if validCouponDocument(request.resource.data)
+        && request.resource.data.usedCount == 0
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && (isAdmin()
+            || (isMerchant()
+                && request.resource.data.storeId is string
+                && ownsStore(request.resource.data.storeId)));
+      allow update: if (isAdmin()
+            && validCouponDocument(request.resource.data)
+            && request.resource.data.createdAt == resource.data.createdAt)
         || (isMerchant()
             && resource.data.storeId is string
             && ownsStore(resource.data.storeId)
-            && request.resource.data.storeId == resource.data.storeId)
-        || (signedIn()
-            && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['usedCount', 'updatedAt'])
-            && request.resource.data.usedCount == resource.data.usedCount + 1);
+            && request.resource.data.storeId == resource.data.storeId
+            && request.resource.data.usedCount == resource.data.usedCount
+            && request.resource.data.createdAt == resource.data.createdAt
+            && validCouponDocument(request.resource.data))
+        || validCouponRedemption(id);
       allow delete: if isAdmin()
         || (isMerchant() && resource.data.storeId is string && ownsStore(resource.data.storeId));
     }
@@ -642,15 +780,72 @@ service cloud.firestore {
           && resource.data.customerId == request.auth.uid
         );
 
-      // Customers can create only their own usage records.
-      allow create: if signedIn()
+      // A usage is valid only as part of the same atomic order redemption.
+      allow create: if isCustomer()
         && request.resource.data.customerId == request.auth.uid
         && request.resource.data.couponId is string
         && request.resource.data.couponCode is string
-        && request.resource.data.orderIds is list;
+        && request.resource.data.orderIds is list
+        && request.resource.data.orderIds.size() > 0
+        && request.resource.data.discount is number
+        && request.resource.data.discount > 0
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && getAfter(customerCouponUsagePath(
+             request.resource.data.couponId,
+             request.auth.uid
+           )).data.lastUsageId == usageId
+        && getAfter(couponPath(request.resource.data.couponId)).data.code
+           == request.resource.data.couponCode;
 
       // Usage history is immutable from the client.
       allow update, delete: if false;
+    }
+
+    match /customerCouponUsages/{counterId} {
+      allow read: if isAdmin()
+        || (signedIn()
+            && (!exists(
+                  /databases/$(database)/documents/customerCouponUsages/$(counterId)
+                )
+                || resource.data.customerId == request.auth.uid));
+
+      allow create: if isCustomer()
+        && counterId == request.resource.data.couponId + '_' + request.auth.uid
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.count == 1
+        && request.resource.data.lastUsageId is string
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && getAfter(couponPath(request.resource.data.couponId)).data.usedCount
+           == get(couponPath(request.resource.data.couponId)).data.usedCount + 1
+        && getAfter(couponUsagePath(request.resource.data.lastUsageId)).data.customerId
+           == request.auth.uid
+        && (!getAfter(couponPath(request.resource.data.couponId)).data.keys()
+               .hasAny(['perCustomerLimit'])
+            || request.resource.data.count
+               <= getAfter(couponPath(request.resource.data.couponId)).data.perCustomerLimit);
+
+      allow update: if isCustomer()
+        && resource.data.customerId == request.auth.uid
+        && request.resource.data.couponId == resource.data.couponId
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['count', 'lastUsageId', 'updatedAt'])
+        && request.resource.data.count == resource.data.count + 1
+        && request.resource.data.lastUsageId is string
+        && request.resource.data.updatedAt == request.time
+        && getAfter(couponPath(resource.data.couponId)).data.usedCount
+           == get(couponPath(resource.data.couponId)).data.usedCount + 1
+        && getAfter(couponUsagePath(request.resource.data.lastUsageId)).data.customerId
+           == request.auth.uid
+        && (!getAfter(couponPath(resource.data.couponId)).data.keys()
+               .hasAny(['perCustomerLimit'])
+            || request.resource.data.count
+               <= getAfter(couponPath(resource.data.couponId)).data.perCustomerLimit);
+
+      allow delete: if false;
     }
 
     // -------------------------------------------------------- notifications

@@ -19,6 +19,7 @@
     "test:e2e:account": "node --use-system-ca scripts/e2e/run-tests.mjs authenticated --project=customer-account",
     "test:security:account": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only firestore \"node --test tests/security/customer-account.rules.node.mjs\"",
     "test:security:reviews": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only firestore \"node --test tests/security/reviews.rules.node.mjs\"",
+    "test:security:discounts": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only firestore \"node --test tests/security/discounts.rules.node.mjs\"",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:report": "playwright show-report"
   },

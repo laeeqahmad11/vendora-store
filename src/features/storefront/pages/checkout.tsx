@@ -35,6 +35,7 @@ import {
 } from '@/stores/cart-store'
 
 import { cn, formatCurrency, getErrorMessage } from '@/lib/utils'
+import { allocateCouponDiscount } from '@/lib/coupons'
 import type { CartItem, Order } from '@/types'
 
 const checkoutSchema = z.object({
@@ -194,35 +195,17 @@ export default function CheckoutPage() {
     enabled: storeIds.length > 0,
   })
 
-  const discountFor = React.useCallback(
-    (group: StoreGroup): number => {
-      if (!coupon) return 0
-
-      const couponStoreId = coupon.coupon.storeId
-
-      if (couponStoreId) {
-        return couponStoreId === group.storeId
-          ? Math.min(coupon.discount, group.subtotal)
-          : 0
-      }
-
-      const eligibleTotal = groups.reduce(
-        (sum, currentGroup) =>
-          sum + currentGroup.subtotal,
-        0,
-      )
-
-      if (!eligibleTotal) return 0
-
-      return (
-        Math.round(
-          ((coupon.discount * group.subtotal) /
-            eligibleTotal) *
-            100,
-        ) / 100
-      )
-    },
+  const couponAllocations = React.useMemo(
+    () =>
+      coupon
+        ? allocateCouponDiscount(coupon.coupon, coupon.discount, groups)
+        : new Map<string, number>(),
     [coupon, groups],
+  )
+
+  const discountFor = React.useCallback(
+    (group: StoreGroup): number => couponAllocations.get(group.storeId) ?? 0,
+    [couponAllocations],
   )
 
   const totalDiscount = React.useMemo(
@@ -452,15 +435,8 @@ export default function CheckoutPage() {
           name: values.fullName,
           role: 'customer',
         },
+        coupon?.coupon.id,
       )
-
-      if (coupon && totalDiscount > 0) {
-        await discountsService.consumeCoupon(
-          coupon.coupon,
-          firebaseUser.uid,
-          ids,
-        )
-      }
 
       if (saveAddress) {
         await usersService

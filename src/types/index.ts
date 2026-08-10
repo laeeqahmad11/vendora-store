@@ -226,7 +226,10 @@ export interface Order {
   items: OrderItem[]
   subtotal: number
   discount: number
+  couponBasis?: number
+  couponId?: string
   couponCode?: string
+  couponUsageId?: string
   shippingFee: number
   tax: number
   total: number

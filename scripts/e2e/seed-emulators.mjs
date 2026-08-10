@@ -99,6 +99,38 @@ const REVIEWS_FIXTURES = {
     comment: 'Foreign-store review must stay outside the approved merchant UI.',
   },
 }
+const DISCOUNT_PRODUCTS = [
+  {
+    id: 'e2e-discount-main',
+    storeId: 'e2e-approved-store',
+    merchantId: 'e2e-merchant',
+    storeName: 'E2E Approved Store',
+    name: 'E2E Discount Main Product',
+    slug: 'e2e-discount-main-product',
+    sku: 'E2E-DIS-MAIN',
+    price: 200,
+  },
+  {
+    id: 'e2e-discount-small',
+    storeId: 'e2e-approved-store',
+    merchantId: 'e2e-merchant',
+    storeName: 'E2E Approved Store',
+    name: 'E2E Discount Small Product',
+    slug: 'e2e-discount-small-product',
+    sku: 'E2E-DIS-SMALL',
+    price: 40,
+  },
+  {
+    id: 'e2e-discount-foreign',
+    storeId: 'e2e-discount-foreign-store',
+    merchantId: 'e2e-discount-foreign-merchant',
+    storeName: 'E2E Discount Foreign Store',
+    name: 'E2E Discount Foreign Product',
+    slug: 'e2e-discount-foreign-product',
+    sku: 'E2E-DIS-FOREIGN',
+    price: 80,
+  },
+]
 
 const USERS = [
   {
@@ -119,6 +151,13 @@ const USERS = [
     email: 'admin@e2e.vendora.test',
     displayName: 'E2E Admin',
     role: 'admin',
+  },
+  {
+    uid: 'e2e-discount-foreign-merchant',
+    email: 'discount-foreign-merchant@e2e.vendora.test',
+    displayName: 'E2E Discount Foreign Merchant',
+    role: 'merchant',
+    storeId: 'e2e-discount-foreign-store',
   },
 ]
 
@@ -169,6 +208,7 @@ async function seed({
   inventoryProduct = false,
   checkoutStockProducts = false,
   reviewsFixtures = false,
+  discountFixtures = false,
 } = {}) {
   process.env.GCLOUD_PROJECT = PROJECT_ID
   process.env.FIREBASE_CONFIG = JSON.stringify({
@@ -441,6 +481,90 @@ async function seed({
       updatedAt: now,
     })
   }
+
+  if (discountFixtures) {
+    const clock = Date.now()
+    await db.doc('stores/e2e-approved-store').update({
+      shippingEnabled: false,
+      shippingFee: 0,
+      updatedAt: now,
+    })
+    await db.doc('stores/e2e-discount-foreign-store').set({
+      ownerId: 'e2e-discount-foreign-merchant',
+      name: 'E2E Discount Foreign Store',
+      slug: 'e2e-discount-foreign-store',
+      description: 'Second deterministic store for coupon isolation tests.',
+      email: 'discount-foreign-store@e2e.vendora.test',
+      phone: '03007654321',
+      status: 'approved',
+      verified: true,
+      rating: 0,
+      ratingCount: 0,
+      productCount: 1,
+      totalSales: 0,
+      shippingEnabled: false,
+      shippingFee: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    for (const product of DISCOUNT_PRODUCTS) {
+      await db.doc(`products/${product.id}`).set({
+        storeId: product.storeId,
+        merchantId: product.merchantId,
+        name: product.name,
+        slug: product.slug,
+        description: 'Deterministic emulator-only product for coupon coverage.',
+        images: [],
+        price: product.price,
+        currency: 'USD',
+        sku: product.sku,
+        stock: 20,
+        lowStockThreshold: 2,
+        minOrderQty: 1,
+        maxOrderQty: 10,
+        categoryId: CATALOG.category.id,
+        subcategoryId: CATALOG.subcategory.id,
+        brandId: CATALOG.brand.id,
+        tags: ['e2e', 'discounts'],
+        status: 'approved',
+        featured: false,
+        trending: false,
+        recommended: false,
+        flashSale: null,
+        rating: 0,
+        ratingCount: 0,
+        ratingSum: 0,
+        soldCount: 0,
+        viewCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        publishedAt: now,
+      })
+    }
+
+    const coupons = [
+      ['percent-cap', { code: 'PERCENT20', type: 'percentage', value: 20, minOrderAmount: 100, maxDiscount: 30 }],
+      ['fixed-large', { code: 'FIXED150', type: 'fixed', value: 150 }],
+      ['store-only', { storeId: 'e2e-approved-store', code: 'STORE25', type: 'fixed', value: 25 }],
+      ['inactive', { code: 'INACTIVE10', type: 'percentage', value: 10, active: false }],
+      ['expired', { code: 'EXPIRED10', type: 'percentage', value: 10, expiresAt: clock - 60_000 }],
+      ['future', { code: 'FUTURE10', type: 'percentage', value: 10, startsAt: clock + 3_600_000 }],
+      ['minimum', { code: 'MINIMUM10', type: 'percentage', value: 10, minOrderAmount: 100 }],
+      ['limit-one', { code: 'LIMITONE', type: 'fixed', value: 10, usageLimit: 1 }],
+      ['customer-one', { code: 'CUSTOMERONE', type: 'fixed', value: 10, perCustomerLimit: 1 }],
+      ['stale', { code: 'STALE20', type: 'percentage', value: 20 }],
+    ]
+    for (const [id, fixture] of coupons) {
+      await db.doc(`coupons/e2e-${id}`).set({
+        ...fixture,
+        active: fixture.active ?? true,
+        usedCount: 0,
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+  }
 }
 
 async function main() {
@@ -449,6 +573,7 @@ async function main() {
   const inventoryProduct = process.argv.includes('--inventory-product')
   const checkoutStockProducts = process.argv.includes('--checkout-stock-products')
   const reviewsFixtures = process.argv.includes('--reviews-fixtures')
+  const discountFixtures = process.argv.includes('--discount-fixtures')
   await resetEmulators({ preserveAuth })
 
   if (process.argv.includes('--reset-only')) {
@@ -456,7 +581,7 @@ async function main() {
     return
   }
 
-  await seed({ preserveAuth, inventoryProduct, checkoutStockProducts, reviewsFixtures })
+  await seed({ preserveAuth, inventoryProduct, checkoutStockProducts, reviewsFixtures, discountFixtures })
   console.log(`Seeded Firebase emulators for ${PROJECT_ID}:`)
   for (const user of USERS) {
     console.log(`  ${user.role}: ${user.email} / ${TEST_PASSWORD}`)
@@ -485,6 +610,9 @@ async function main() {
       `  foreign review: ${REVIEWS_FIXTURES.foreignReview.id} for ` +
         `${REVIEWS_FIXTURES.foreignStore.name}`,
     )
+  }
+  if (discountFixtures) {
+    console.log(`  discount fixtures: ${DISCOUNT_PRODUCTS.length} products, 10 coupons`)
   }
 }
 
