@@ -16,6 +16,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/stores/$(storeId);
     }
 
+    function productPath(productId) {
+      return /databases/$(database)/documents/products/$(productId);
+    }
+
     function currentUserExists() {
       return signedIn() && exists(userPath(request.auth.uid));
     }
@@ -30,6 +34,10 @@ service cloud.firestore {
 
     function isMerchant() {
       return currentUserExists() && userDoc().role == 'merchant';
+    }
+
+    function isCustomer() {
+      return currentUserExists() && userDoc().role == 'customer';
     }
 
     function isSelf(uid) {
@@ -63,6 +71,90 @@ service cloud.firestore {
         'order_update', 'approval', 'review', 'discount', 'announcement',
         'low_stock', 'message', 'support'
       ];
+    }
+
+    function validReviewCreate() {
+      return request.resource.data.keys().hasAll([
+          'productId', 'storeId', 'customerId', 'customerName', 'rating',
+          'comment', 'status', 'helpfulCount', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'productId', 'storeId', 'customerId', 'customerName', 'rating',
+          'title', 'comment', 'images', 'status', 'helpfulCount',
+          'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.productId is string
+        && request.resource.data.storeId is string
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.customerName is string
+        && request.resource.data.customerName.size() > 0
+        && request.resource.data.customerName.size() <= 100
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.comment is string
+        && request.resource.data.comment.size() > 0
+        && (!request.resource.data.keys().hasAny(['title'])
+            || (request.resource.data.title is string
+                && request.resource.data.title.size() > 0
+                && request.resource.data.title.size() <= 100))
+        && (!request.resource.data.keys().hasAny(['images'])
+            || (request.resource.data.images is list
+                && request.resource.data.images.size() <= 4))
+        && request.resource.data.status == 'approved'
+        && request.resource.data.helpfulCount == 0
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && exists(productPath(request.resource.data.productId))
+        && get(productPath(request.resource.data.productId)).data.status == 'approved'
+        && get(productPath(request.resource.data.productId)).data.storeId
+             == request.resource.data.storeId;
+    }
+
+    function validReviewReply(reply) {
+      return reply is map
+        && reply.keys().hasAll(['text', 'at'])
+        && reply.keys().hasOnly(['text', 'at'])
+        && reply.text is string
+        && reply.text.size() > 0
+        && reply.text.size() <= 2000
+        && reply.at is int;
+    }
+
+    function validMerchantReviewUpdate() {
+      return signedIn()
+        && ownsStore(resource.data.storeId)
+        && request.resource.data.updatedAt == request.time
+        && (
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'updatedAt'
+            ])
+            && request.resource.data.status != resource.data.status
+            && request.resource.data.status in ['approved', 'hidden', 'rejected'])
+          || (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'reply', 'updatedAt'
+            ])
+            && validReviewReply(request.resource.data.reply))
+        );
+    }
+
+    function validReviewInteraction() {
+      return signedIn()
+        && resource.data.status == 'approved'
+        && request.resource.data.updatedAt == request.time
+        && (
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'helpfulCount', 'updatedAt'
+            ])
+            && request.resource.data.helpfulCount is int
+            && request.resource.data.helpfulCount == resource.data.helpfulCount + 1)
+          || (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'reported', 'updatedAt'
+            ])
+            && (!resource.data.keys().hasAny(['reported'])
+                || resource.data.reported != true)
+            && request.resource.data.reported == true)
+        );
     }
 
     // -------------------------------------------------------------- users
@@ -265,16 +357,26 @@ service cloud.firestore {
 
     // ------------------------------------------------------------- reviews
     match /reviews/{id} {
-      allow read: if true;
-      allow create: if signedIn() && request.resource.data.customerId == request.auth.uid;
-      // Author edits own review; store owner moderates (status/reply); admin all.
-      allow update: if isAdmin()
+      // Only approved reviews are public. Authors, owning stores, and admins
+      // retain the non-public visibility used by their existing dashboards.
+      allow read: if resource.data.status == 'approved'
+        || isAdmin()
         || (signedIn() && resource.data.customerId == request.auth.uid)
-        || (signedIn() && ownsStore(resource.data.storeId))
-        || (signedIn()
-            && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['helpfulCount', 'reported', 'updatedAt']));
-      allow delete: if isAdmin() || (signedIn() && resource.data.customerId == request.auth.uid);
+        || (signedIn() && ownsStore(resource.data.storeId));
+
+      // The storefront publishes customer reviews immediately. Identity,
+      // moderation, reply, verification, counters, and timestamps cannot be
+      // supplied outside that exact client workflow.
+      allow create: if isCustomer() && validReviewCreate();
+
+      // There is no author editing workflow. Store owners may only moderate
+      // or reply, while signed-in storefront users retain helpful/report.
+      allow update: if isAdmin()
+        || validMerchantReviewUpdate()
+        || validReviewInteraction();
+
+      // Review deletion is an admin-only moderation action.
+      allow delete: if isAdmin();
     }
 
     // ------------------------------------------------- coupons & promotions

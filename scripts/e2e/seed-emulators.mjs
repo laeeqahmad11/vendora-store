@@ -76,6 +76,29 @@ const CHECKOUT_STOCK_PRODUCTS = [
     maxOrderQty: 10,
   },
 ]
+const REVIEWS_FIXTURES = {
+  product: {
+    id: 'e2e-reviews-product',
+    name: 'E2E Reviews Product',
+    slug: 'e2e-reviews-product',
+    sku: 'E2E-REV-001',
+  },
+  foreignStore: {
+    id: 'e2e-foreign-store',
+    name: 'E2E Foreign Store',
+    slug: 'e2e-foreign-store',
+  },
+  foreignProduct: {
+    id: 'e2e-foreign-reviews-product',
+    name: 'E2E Foreign Reviews Product',
+    slug: 'e2e-foreign-reviews-product',
+    sku: 'E2E-REV-FOREIGN-001',
+  },
+  foreignReview: {
+    id: 'e2e-foreign-review',
+    comment: 'Foreign-store review must stay outside the approved merchant UI.',
+  },
+}
 
 const USERS = [
   {
@@ -141,7 +164,12 @@ async function resetEmulators({ preserveAuth = false } = {}) {
   await Promise.all(resets)
 }
 
-async function seed({ preserveAuth = false, inventoryProduct = false, checkoutStockProducts = false } = {}) {
+async function seed({
+  preserveAuth = false,
+  inventoryProduct = false,
+  checkoutStockProducts = false,
+  reviewsFixtures = false,
+} = {}) {
   process.env.GCLOUD_PROJECT = PROJECT_ID
   process.env.FIREBASE_CONFIG = JSON.stringify({
     projectId: PROJECT_ID,
@@ -307,6 +335,107 @@ async function seed({ preserveAuth = false, inventoryProduct = false, checkoutSt
       })
     }
   }
+
+  if (reviewsFixtures) {
+    await Promise.all([
+      db.doc(`products/${REVIEWS_FIXTURES.product.id}`).set({
+        storeId: 'e2e-approved-store',
+        merchantId: 'e2e-merchant',
+        name: REVIEWS_FIXTURES.product.name,
+        slug: REVIEWS_FIXTURES.product.slug,
+        description: 'Deterministic emulator-only product for reviews and ratings E2E coverage.',
+        images: [],
+        price: 1500,
+        currency: 'USD',
+        sku: REVIEWS_FIXTURES.product.sku,
+        stock: 10,
+        lowStockThreshold: 2,
+        minOrderQty: 1,
+        maxOrderQty: 10,
+        categoryId: CATALOG.category.id,
+        subcategoryId: CATALOG.subcategory.id,
+        brandId: CATALOG.brand.id,
+        tags: ['e2e', 'reviews'],
+        status: 'approved',
+        rejectionReason: '',
+        featured: false,
+        trending: false,
+        recommended: false,
+        flashSale: null,
+        rating: 0,
+        ratingCount: 0,
+        soldCount: 0,
+        viewCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        publishedAt: now,
+      }),
+      db.doc(`stores/${REVIEWS_FIXTURES.foreignStore.id}`).set({
+        ownerId: 'e2e-foreign-merchant',
+        name: REVIEWS_FIXTURES.foreignStore.name,
+        slug: REVIEWS_FIXTURES.foreignStore.slug,
+        description: 'Deterministic second store for review isolation coverage.',
+        email: 'foreign-store@e2e.vendora.test',
+        phone: '03007654321',
+        address: 'E2E Foreign Test Street, Localhost',
+        businessName: 'Vendora Foreign E2E Store',
+        status: 'approved',
+        verified: true,
+        rating: 0,
+        ratingCount: 0,
+        productCount: 1,
+        totalSales: 0,
+        createdAt: now,
+        updatedAt: now,
+      }),
+      db.doc(`products/${REVIEWS_FIXTURES.foreignProduct.id}`).set({
+        storeId: REVIEWS_FIXTURES.foreignStore.id,
+        merchantId: 'e2e-foreign-merchant',
+        name: REVIEWS_FIXTURES.foreignProduct.name,
+        slug: REVIEWS_FIXTURES.foreignProduct.slug,
+        description: 'Deterministic foreign-store product for review isolation coverage.',
+        images: [],
+        price: 1600,
+        currency: 'USD',
+        sku: REVIEWS_FIXTURES.foreignProduct.sku,
+        stock: 10,
+        lowStockThreshold: 2,
+        minOrderQty: 1,
+        maxOrderQty: 10,
+        categoryId: CATALOG.category.id,
+        subcategoryId: CATALOG.subcategory.id,
+        brandId: CATALOG.brand.id,
+        tags: ['e2e', 'reviews', 'foreign-store'],
+        status: 'approved',
+        rejectionReason: '',
+        featured: false,
+        trending: false,
+        recommended: false,
+        flashSale: null,
+        rating: 3,
+        ratingCount: 1,
+        soldCount: 0,
+        viewCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        publishedAt: now,
+      }),
+    ])
+
+    await db.doc(`reviews/${REVIEWS_FIXTURES.foreignReview.id}`).set({
+      productId: REVIEWS_FIXTURES.foreignProduct.id,
+      storeId: REVIEWS_FIXTURES.foreignStore.id,
+      customerId: 'e2e-foreign-customer',
+      customerName: 'E2E Foreign Customer',
+      rating: 3,
+      title: 'Foreign review fixture',
+      comment: REVIEWS_FIXTURES.foreignReview.comment,
+      status: 'approved',
+      helpfulCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+  }
 }
 
 async function main() {
@@ -314,6 +443,7 @@ async function main() {
   const preserveAuth = process.argv.includes('--preserve-auth')
   const inventoryProduct = process.argv.includes('--inventory-product')
   const checkoutStockProducts = process.argv.includes('--checkout-stock-products')
+  const reviewsFixtures = process.argv.includes('--reviews-fixtures')
   await resetEmulators({ preserveAuth })
 
   if (process.argv.includes('--reset-only')) {
@@ -321,7 +451,7 @@ async function main() {
     return
   }
 
-  await seed({ preserveAuth, inventoryProduct, checkoutStockProducts })
+  await seed({ preserveAuth, inventoryProduct, checkoutStockProducts, reviewsFixtures })
   console.log(`Seeded Firebase emulators for ${PROJECT_ID}:`)
   for (const user of USERS) {
     console.log(`  ${user.role}: ${user.email} / ${TEST_PASSWORD}`)
@@ -340,6 +470,16 @@ async function main() {
           `stock ${product.stock}, sold 0, max order ${product.maxOrderQty}`,
       )
     }
+  }
+  if (reviewsFixtures) {
+    console.log(
+      `  reviews product: ${REVIEWS_FIXTURES.product.name} (${REVIEWS_FIXTURES.product.sku}), ` +
+        'rating 0, reviews 0',
+    )
+    console.log(
+      `  foreign review: ${REVIEWS_FIXTURES.foreignReview.id} for ` +
+        `${REVIEWS_FIXTURES.foreignStore.name}`,
+    )
   }
 }
 

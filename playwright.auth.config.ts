@@ -47,6 +47,13 @@ export default defineConfig({
       use: { ...sharedUse, storageState: authState('customer') },
     },
     {
+      name: 'reviews-ratings',
+      testMatch: /authenticated\/reviews-ratings\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('customer') },
+    },
+    {
       name: 'merchant',
       testMatch: /authenticated\/merchant(?:-products)?\.spec\.ts/,
       dependencies: ['auth-setup'],

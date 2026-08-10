@@ -40,6 +40,15 @@ Tests are organized by feature:
   reload/navigation and logout/login persistence, toggle-based duplicate
   protection, removal, cross-surface state, move-to-cart semantics, and safe
   out-of-stock handling.
+- `authenticated/reviews-ratings.spec.ts` covers the implemented product-page
+  review workflow: authentication and validation gates, immediate publication,
+  persisted review associations, rating/count aggregation, the currently
+  allowed repeat-review behavior, customer/public consistency, merchant reply
+  and status controls, admin deletion, and merchant cross-store UI isolation.
+- `security/reviews.rules.node.mjs` uses direct Firebase clients against the
+  local Firestore emulator to enforce approved-only public reads, strict review
+  creates, author update/delete denial, merchant field and store isolation, and
+  admin moderation/delete. Run it with `npm run test:security:reviews`.
 - `authenticated/merchant-order-fulfillment.spec.ts` advances that real order
   through every merchant fulfillment action (confirmed, packed, ready,
   dispatched, delivered, and COD completion), checking customer/admin status,
