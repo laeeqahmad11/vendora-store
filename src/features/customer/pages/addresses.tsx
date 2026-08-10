@@ -88,20 +88,6 @@ export default function AddressesPage() {
       queryKey: ['addresses', uid],
     })
 
-  const clearOtherDefaults = async (exceptId?: string) => {
-    const currentDefaultAddresses = (data ?? []).filter(
-      (address) => address.isDefault && address.id !== exceptId,
-    )
-
-    await Promise.all(
-      currentDefaultAddresses.map((address) =>
-        usersService.updateAddress(uid, address.id, {
-          isDefault: false,
-        }),
-      ),
-    )
-  }
-
   const saveMutation = useMutation({
     mutationFn: async (values: AddressValues) => {
       const payload = {
@@ -119,19 +105,10 @@ export default function AddressesPage() {
 
       if (editing) {
         await usersService.updateAddress(uid, editing.id, payload)
-
-        if (isDefault) {
-          await clearOtherDefaults(editing.id)
-        }
-
         return
       }
 
-      const newAddressId = await usersService.addAddress(uid, payload)
-
-      if (isDefault) {
-        await clearOtherDefaults(newAddressId)
-      }
+      await usersService.addAddress(uid, payload)
     },
 
     onSuccess: async () => {
@@ -157,8 +134,6 @@ export default function AddressesPage() {
       await usersService.updateAddress(uid, address.id, {
         isDefault: true,
       })
-
-      await clearOtherDefaults(address.id)
     },
 
     onSuccess: async () => {

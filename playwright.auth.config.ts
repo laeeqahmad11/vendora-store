@@ -40,6 +40,13 @@ export default defineConfig({
       use: { ...sharedUse, storageState: authState('customer') },
     },
     {
+      name: 'customer-account',
+      testMatch: /authenticated\/customer-account\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('customer') },
+    },
+    {
       name: 'wishlist',
       testMatch: /authenticated\/wishlist\.spec\.ts/,
       dependencies: ['auth-setup'],

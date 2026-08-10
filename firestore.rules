@@ -81,6 +81,107 @@ service cloud.firestore {
       ];
     }
 
+    function validProfileFields(data) {
+      return data.email is string
+        && data.email.size() > 0
+        && data.email.size() <= 320
+        && data.displayName is string
+        && data.displayName.size() >= 2
+        && data.displayName.size() <= 50
+        && data.role in ['admin', 'merchant', 'customer']
+        && (!data.keys().hasAny(['photoURL'])
+            || (data.photoURL is string && data.photoURL.size() <= 2048))
+        && (!data.keys().hasAny(['phone'])
+            || (data.phone is string && data.phone.size() <= 30))
+        && (!data.keys().hasAny(['suspended']) || data.suspended is bool)
+        && (!data.keys().hasAny(['emailVerified']) || data.emailVerified is bool)
+        && (!data.keys().hasAny(['storeId']) || data.storeId is string);
+    }
+
+    function validCustomerProfileCreate(uid) {
+      return isSelf(uid)
+        && request.resource.data.keys().hasAll([
+          'email', 'displayName', 'role', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'email', 'displayName', 'photoURL', 'phone', 'role',
+          'emailVerified', 'suspended', 'createdAt', 'updatedAt'
+        ])
+        && validProfileFields(request.resource.data)
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role == 'customer'
+        && (!request.resource.data.keys().hasAny(['suspended'])
+            || request.resource.data.suspended == false)
+        && (!request.resource.data.keys().hasAny(['emailVerified'])
+            || request.resource.data.emailVerified
+                 == (request.auth.token.email_verified == true))
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validSelfProfileUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName', 'photoURL', 'phone', 'updatedAt'
+        ])
+        && validProfileFields(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validAddress(data) {
+      return data.keys().hasAll([
+          'label', 'fullName', 'phone', 'line1', 'city', 'province',
+          'postalCode', 'country', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'label', 'fullName', 'phone', 'line1', 'line2', 'city',
+          'province', 'postalCode', 'country', 'isDefault',
+          'createdAt', 'updatedAt'
+        ])
+        && data.label is string
+        && data.label.size() >= 1
+        && data.label.size() <= 50
+        && data.fullName is string
+        && data.fullName.size() >= 2
+        && data.fullName.size() <= 100
+        && data.phone is string
+        && data.phone.size() >= 6
+        && data.phone.size() <= 30
+        && data.line1 is string
+        && data.line1.size() >= 3
+        && data.line1.size() <= 200
+        && (!data.keys().hasAny(['line2'])
+            || (data.line2 is string && data.line2.size() <= 200))
+        && data.city is string
+        && data.city.size() >= 2
+        && data.city.size() <= 100
+        && data.province is string
+        && data.province.size() >= 2
+        && data.province.size() <= 100
+        && data.postalCode is string
+        && data.postalCode.size() >= 2
+        && data.postalCode.size() <= 20
+        && data.country is string
+        && data.country.size() >= 2
+        && data.country.size() <= 100
+        && (!data.keys().hasAny(['isDefault']) || data.isDefault is bool);
+    }
+
+    function validAddressCreate() {
+      return validAddress(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validAddressUpdate() {
+      return validAddress(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'label', 'fullName', 'phone', 'line1', 'line2', 'city',
+          'province', 'postalCode', 'country', 'isDefault', 'updatedAt'
+        ])
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+    }
+
     function validProductAggregate(data) {
       return data.ratingCount is int
         && data.ratingCount >= 0
@@ -271,27 +372,21 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if isSelf(uid) || isAdmin();
 
-      allow create: if isSelf(uid)
-        && request.resource.data.role == 'customer'
-        && (!request.resource.data.keys().hasAny(['suspended'])
-            || request.resource.data.suspended == false)
-        && !request.resource.data.keys().hasAny(['storeId']);
+      allow create: if validCustomerProfileCreate(uid);
 
       // Self-service updates are limited to normal profile fields.
-      // role, suspended, storeId and createdAt are platform-managed.
+      // Email/verification, role, suspended, storeId and createdAt are managed
+      // by Firebase Auth or the platform, never by customer profile writes.
       allow update: if isAdmin()
-        || (isSelf(uid)
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-              'displayName', 'photoURL', 'phone', 'email',
-              'emailVerified', 'updatedAt'
-            ])
-            && (!request.resource.data.keys().hasAny(['email'])
-                || request.resource.data.email == request.auth.token.email));
+        || (isSelf(uid) && validSelfProfileUpdate());
 
       allow delete: if isAdmin();
 
       match /addresses/{addressId} {
-        allow read, create, update, delete: if isSelf(uid);
+        allow read: if isSelf(uid);
+        allow create: if isSelf(uid) && validAddressCreate();
+        allow update: if isSelf(uid) && validAddressUpdate();
+        allow delete: if isSelf(uid);
       }
     }
 
