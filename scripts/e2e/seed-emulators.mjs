@@ -256,6 +256,17 @@ async function seed({
     })
   }
 
+  await db.doc('notifications/e2e-customer-welcome').set({
+    userId: 'e2e-customer',
+    type: 'announcement',
+    title: 'Welcome to Vendora notifications',
+    body: 'Trusted order and account updates will appear here.',
+    linkUrl: '/account/notifications',
+    read: false,
+    createdAt: now,
+    updatedAt: now,
+  })
+
   await db.doc('stores/e2e-approved-store').set({
     ownerId: 'e2e-merchant',
     name: 'E2E Approved Store',

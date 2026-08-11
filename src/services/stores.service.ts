@@ -13,7 +13,6 @@ import { db, functions } from '@/lib/firebase'
 import { COLLECTIONS } from '@/lib/constants'
 import { getDocById, queryDocs, updateDocument } from '@/services/firestore'
 import { activityService } from '@/services/activity.service'
-import { notificationsService } from '@/services/notifications.service'
 import { slugify } from '@/lib/utils'
 import type { MerchantApplication, Store, StoreStatus, UserRole } from '@/types'
 
@@ -142,15 +141,6 @@ export const storesService = {
   async setStatus(store: Store, status: StoreStatus, actor: Actor, reason?: string) {
     await moderateStore({ storeId: store.id, status, ...(reason ? { reason } : {}) })
     await activityService.log(actor, `store.${status}`, 'store', store.id, store.name)
-    await notificationsService.notify(store.ownerId, {
-      type: 'approval',
-      title: `Store ${status}`,
-      body:
-        status === 'approved'
-          ? `Congratulations! "${store.name}" is now live. You can start listing products.`
-          : `Your store "${store.name}" was ${status}.${reason ? ` Reason: ${reason}` : ''}`,
-      linkUrl: '/merchant',
-    })
   },
 
   async remove(id: string) {

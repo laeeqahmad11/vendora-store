@@ -98,6 +98,11 @@ test('active admin suspension hides products before completing moderation state'
   assert.equal(application.data().rejectionReason, 'Policy review')
   assert.equal(product.data().publiclyVisible, false)
   assert.equal(publicStore.exists, false)
+  const notifications = await adminDb.collection('notifications')
+    .where('title', '==', 'Store suspended').get()
+  assert.equal(notifications.size, 1)
+  assert.equal(notifications.docs[0].get('userId'), 'moderation-owner')
+  assert.match(notifications.docs[0].get('body'), /Policy review/)
 })
 
 test('active admin approval restores only approved-product visibility and owner linkage', async () => {
@@ -119,6 +124,10 @@ test('active admin approval restores only approved-product visibility and owner 
   assert.equal(owner.data().storeId, 'moderation-store')
   assert.equal(publicStore.data().status, 'approved')
   assert.equal(publicStore.data().ownerId, 'moderation-owner')
+  const notifications = await adminDb.collection('notifications')
+    .where('title', '==', 'Store approved').get()
+  assert.equal(notifications.size, 1)
+  assert.equal(notifications.docs[0].get('userId'), 'moderation-owner')
 })
 
 test('suspended admins and customers cannot invoke trusted store moderation', async () => {

@@ -93,6 +93,115 @@ export const syncStoreProductVisibility = onDocumentWritten(
   },
 )
 
+function appendNotification(transaction, userId, { type, title, body, linkUrl }) {
+  transaction.set(db.collection('notifications').doc(), {
+    userId,
+    type,
+    title,
+    body,
+    ...(linkUrl ? { linkUrl } : {}),
+    read: false,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  })
+}
+
+function notificationDeliveryId(eventId, suffix) {
+  return createHash('sha256').update(`${eventId}:${suffix}`).digest('hex')
+}
+
+async function deliverSupportNotification(eventId, suffix, userId, title, body, linkUrl) {
+  if (typeof userId !== 'string' || !userId) return
+  await db.collection('notifications').doc(notificationDeliveryId(eventId, suffix)).set({
+    userId,
+    type: 'support',
+    title,
+    body,
+    linkUrl,
+    read: false,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  })
+}
+
+async function supportAdminIds() {
+  const admins = await db.collection('users').where('role', '==', 'admin').get()
+  return admins.docs
+    .filter((admin) => admin.get('suspended') !== true)
+    .map((admin) => admin.id)
+}
+
+/**
+ * Support tickets remain a tightly constrained Firestore workflow. Trusted,
+ * idempotent notifications are derived after the ticket write commits so a
+ * delivery failure can never roll back or corrupt the support conversation.
+ */
+export const createSupportNotifications = onDocumentWritten(
+  { document: 'supportTickets/{ticketId}', region: REGION },
+  async (event) => {
+    const before = event.data?.before.exists ? event.data.before.data() : undefined
+    const after = event.data?.after.exists ? event.data.after.data() : undefined
+    if (!after) return
+
+    const deliveries = []
+    if (!before) {
+      const adminIds = await supportAdminIds()
+      for (const adminId of adminIds) {
+        deliveries.push(deliverSupportNotification(
+          event.id,
+          `created:${adminId}`,
+          adminId,
+          'New support ticket',
+          `${after.customerName ?? 'A customer'} opened "${after.subject ?? 'Support request'}".`,
+          '/admin/support',
+        ))
+      }
+    } else {
+      const beforeMessages = Array.isArray(before.messages) ? before.messages : []
+      const afterMessages = Array.isArray(after.messages) ? after.messages : []
+      if (afterMessages.length > beforeMessages.length) {
+        const latest = afterMessages.at(-1)
+        if (latest?.senderId === after.customerId) {
+          const adminIds = await supportAdminIds()
+          for (const adminId of adminIds) {
+            deliveries.push(deliverSupportNotification(
+              event.id,
+              `customer-reply:${adminId}`,
+              adminId,
+              'New support reply',
+              `${after.customerName ?? 'A customer'} replied to "${after.subject ?? 'Support request'}".`,
+              '/admin/support',
+            ))
+          }
+        } else {
+          deliveries.push(deliverSupportNotification(
+            event.id,
+            'staff-reply',
+            after.customerId,
+            'Support team replied',
+            `You have a new reply on "${after.subject ?? 'Support request'}".`,
+            '/account/support',
+          ))
+        }
+      }
+
+      if (after.status !== before.status) {
+        const statusLabel = String(after.status ?? 'updated').replace(/_/g, ' ')
+        deliveries.push(deliverSupportNotification(
+          event.id,
+          'status',
+          after.customerId,
+          'Support ticket updated',
+          `"${after.subject ?? 'Support request'}" is now ${statusLabel}.`,
+          '/account/support',
+        ))
+      }
+    }
+
+    await Promise.all(deliveries)
+  },
+)
+
 export const moderateStore = onCall(
   {
     region: REGION,
@@ -154,9 +263,70 @@ export const moderateStore = onCall(
       } else {
         transaction.delete(publicStoreRef)
       }
+      appendNotification(transaction, store.data().ownerId, {
+        type: 'approval',
+        title: `Store ${status}`,
+        body:
+          status === 'approved'
+            ? `Congratulations! "${store.data().name}" is now live. You can start listing products.`
+            : `Your store "${store.data().name}" was ${status}.${reason ? ` Reason: ${reason}` : ''}`,
+        linkUrl: '/merchant',
+      })
     })
 
     if (status === 'approved') await setStoreProductsPublicVisibility(storeId, true)
+    return { status }
+  },
+)
+
+/** Moderate one product and notify its merchant in the same transaction. */
+export const moderateProduct = onCall(
+  {
+    region: REGION,
+    timeoutSeconds: 60,
+    memory: '256MiB',
+    enforceAppCheck:
+      process.env.FUNCTIONS_EMULATOR !== 'true' && process.env.CHECKOUT_ENFORCE_APP_CHECK === 'true',
+  },
+  async (request) => {
+    const adminId = request.auth?.uid
+    if (!adminId) fail('unauthenticated', 'Sign in to moderate products.')
+    if (!isObject(request.data)) fail('invalid-argument', 'Product moderation request is invalid.')
+    const productId = cleanIdentifier(request.data.productId, 'Product ID')
+    const status = request.data.status
+    if (!['approved', 'rejected', 'archived'].includes(status)) {
+      fail('invalid-argument', 'Product status is invalid.')
+    }
+    const reason = cleanString(request.data.reason, 'Reason', 1, 2000, { optional: true })
+
+    await db.runTransaction(async (transaction) => {
+      const [admin, product] = await Promise.all([
+        transaction.get(db.doc(`users/${adminId}`)),
+        transaction.get(db.doc(`products/${productId}`)),
+      ])
+      if (!admin.exists || admin.data()?.role !== 'admin' || admin.data()?.suspended === true) {
+        fail('permission-denied', 'Active administrator access is required.')
+      }
+      if (!product.exists) fail('not-found', 'Product was not found.')
+      const data = product.data()
+      if (typeof data.merchantId !== 'string' || !data.merchantId) {
+        fail('failed-precondition', 'Product merchant ownership is invalid.')
+      }
+
+      transaction.update(product.ref, {
+        status,
+        rejectionReason: reason ?? '',
+        ...(status === 'approved' ? { publishedAt: FieldValue.serverTimestamp() } : { publiclyVisible: false }),
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+      appendNotification(transaction, data.merchantId, {
+        type: 'approval',
+        title: `Product ${status}`,
+        body: `"${data.name}" was ${status}.${reason ? ` Reason: ${reason}` : ''}`,
+        linkUrl: '/merchant/products',
+      })
+    })
+
     return { status }
   },
 )
@@ -849,15 +1019,11 @@ function appendOrderActivity(transaction, { uid, user, order, orderId, action, d
 }
 
 function appendOrderNotification(transaction, userId, orderId, title, body, linkPrefix = '/account/orders') {
-  transaction.set(db.collection('notifications').doc(), {
-    userId,
+  appendNotification(transaction, userId, {
     type: 'order_update',
     title,
     body,
     linkUrl: `${linkPrefix}/${orderId}`,
-    read: false,
-    createdAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
   })
 }
 
@@ -1103,16 +1269,15 @@ export const cancelOrder = onCall(checkoutOptions(), async (request) => {
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       })
-      transaction.set(db.collection('notifications').doc(), {
-        userId: order.merchantId,
-        type: 'order_update',
-        title: `Order ${order.orderNumber} cancelled`,
-        body: reason,
-        linkUrl: `/merchant/orders/${orderId}`,
-        read: false,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      })
+      const cancelledByCustomer = user.role === 'customer'
+      appendOrderNotification(
+        transaction,
+        cancelledByCustomer ? order.merchantId : order.customerId,
+        orderId,
+        `Order ${order.orderNumber} cancelled`,
+        reason,
+        cancelledByCustomer ? '/merchant/orders' : '/account/orders',
+      )
       return { orderId, status: 'cancelled' }
     })
 

@@ -110,13 +110,6 @@ service cloud.firestore {
       return priority in ['low', 'medium', 'high'];
     }
 
-    function validNotificationType(type) {
-      return type in [
-        'order_update', 'approval', 'review', 'discount', 'announcement',
-        'low_stock', 'message', 'support'
-      ];
-    }
-
     function validCouponDocument(data) {
       return data.keys().hasAll([
           'code', 'type', 'value', 'usedCount', 'active', 'createdAt', 'updatedAt'
@@ -812,6 +805,9 @@ service cloud.firestore {
 
         || (isAdmin()
             && aggregateFieldsUnchanged()
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+              'status', 'rejectionReason', 'publishedAt', 'publiclyVisible'
+            ])
             && ((request.resource.data.status == 'approved'
                   && request.resource.data.publiclyVisible
                        == resource.data.publiclyVisible)
@@ -991,20 +987,16 @@ service cloud.firestore {
     match /notifications/{id} {
       allow read: if signedIn() && resource.data.userId == request.auth.uid;
 
-      // Current order/support services create cross-user notifications client-side.
-      // Validate the payload while keeping that workflow functional.
-      allow create: if isActiveUser()
-        && request.resource.data.userId is string
-        && request.resource.data.type is string
-        && request.resource.data.title is string
-        && request.resource.data.body is string
-        && request.resource.data.read == false
-        && validNotificationType(request.resource.data.type);
+      // Business-event notifications are created only by trusted backend code.
+      // Admin SDK writes bypass rules; no browser role may forge one.
+      allow create: if false;
 
-      // Recipient can only change read state.
+      // An active recipient can change only their own boolean read state.
       allow update: if isActiveUser()
         && resource.data.userId == request.auth.uid
         && request.resource.data.userId == resource.data.userId
+        && request.resource.data.read is bool
+        && request.resource.data.updatedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['read', 'updatedAt']);
 
@@ -1055,7 +1047,18 @@ service cloud.firestore {
             'status', 'priority', 'messages', 'updatedAt'
           ])
           && validSupportStatus(request.resource.data.status)
-          && validSupportPriority(request.resource.data.priority))
+          && validSupportPriority(request.resource.data.priority)
+          && request.resource.data.messages is list
+          && (
+            request.resource.data.messages == resource.data.messages
+            || (
+              request.resource.data.messages.size()
+                == resource.data.messages.size() + 1
+              && request.resource.data.messages[
+                   request.resource.data.messages.size() - 1
+                 ].senderId == request.auth.uid
+            )
+          ))
 
         // Customer can append exactly one message and cannot change metadata.
         || (isActiveUser()

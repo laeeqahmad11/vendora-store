@@ -334,6 +334,11 @@ test('server owns customer identity and every financial field', async () => {
   const productState = (await adminDb.doc('products/forged').get()).data()
   assert.equal(productState.stock, 8)
   assert.equal(productState.soldCount, 2)
+  const notifications = await adminDb.collection('notifications')
+    .where('linkUrl', '==', `/merchant/orders/${result.orderIds[0]}`).get()
+  assert.equal(notifications.size, 1)
+  assert.equal(notifications.docs[0].get('userId'), 'checkout-merchant-1')
+  assert.equal(notifications.docs[0].get('title'), 'New order received')
 })
 
 test('stale stock and multi-item partial failure create no side effects', async () => {

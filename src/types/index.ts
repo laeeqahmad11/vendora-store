@@ -347,6 +347,7 @@ export type NotificationType =
   | 'announcement'
   | 'low_stock'
   | 'message'
+  | 'support'
 
 export interface AppNotification {
   id: string
@@ -357,6 +358,7 @@ export interface AppNotification {
   linkUrl?: string
   read: boolean
   createdAt: number
+  updatedAt: number
 }
 
 // ------------------------------------------------------------------ CMS

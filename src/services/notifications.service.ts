@@ -4,32 +4,17 @@ import {
   onSnapshot,
   orderBy,
   query,
+  serverTimestamp,
   where,
   writeBatch,
   doc,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { COLLECTIONS } from '@/lib/constants'
-import { createDocument, queryDocs, snapToDoc, updateDocument } from '@/services/firestore'
-import type { AppNotification, NotificationType } from '@/types'
+import { queryDocs, snapToDoc, updateDocument } from '@/services/firestore'
+import type { AppNotification } from '@/types'
 
 export const notificationsService = {
-  /** Fire-and-forget — notification failures never break the primary action */
-  async notify(
-    userId: string,
-    data: { type: NotificationType; title: string; body: string; linkUrl?: string },
-  ) {
-    try {
-      await createDocument<AppNotification>(COLLECTIONS.notifications, {
-        userId,
-        ...data,
-        read: false,
-      } as Omit<AppNotification, 'id' | 'createdAt' | 'updatedAt'>)
-    } catch {
-      /* non-fatal */
-    }
-  },
-
   /** Real-time subscription to the user's latest notifications */
   subscribe(userId: string, callback: (items: AppNotification[]) => void) {
     const q = query(
@@ -56,7 +41,10 @@ export const notificationsService = {
 
   async markAllRead(ids: string[]) {
     const batch = writeBatch(db)
-    ids.forEach((id) => batch.update(doc(db, COLLECTIONS.notifications, id), { read: true }))
+    ids.forEach((id) => batch.update(doc(db, COLLECTIONS.notifications, id), {
+      read: true,
+      updatedAt: serverTimestamp(),
+    }))
     await batch.commit()
   },
 }

@@ -31,7 +31,6 @@ import { productsService } from '@/services/products.service'
 import { storesService } from '@/services/stores.service'
 import { catalogService } from '@/services/catalog.service'
 import { activityService } from '@/services/activity.service'
-import { notificationsService } from '@/services/notifications.service'
 import { useRealtimeCollection } from '@/hooks/use-realtime'
 import { LiveBadge } from '@/components/shared/live-badge'
 import { COLLECTIONS } from '@/lib/constants'
@@ -105,12 +104,6 @@ function useProductReviewMutation(onDone?: () => void) {
     }) => {
       await productsService.setStatus(product.id, status, reason)
       await activityService.log(actor, `product.${status}`, 'product', product.id, product.name)
-      await notificationsService.notify(product.merchantId, {
-        type: 'approval',
-        title: `Product ${status}`,
-        body: `"${product.name}" was ${status}.${reason ? ` Reason: ${reason}` : ''}`,
-        linkUrl: '/merchant/products',
-      })
     },
     onSuccess: (_d, v) => {
       qc.invalidateQueries({ queryKey: ['admin-products-pending'] })

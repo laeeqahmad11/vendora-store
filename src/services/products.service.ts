@@ -10,7 +10,8 @@ import {
   type QueryConstraint,
   type QueryDocumentSnapshot,
 } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from '@/lib/firebase'
 import { COLLECTIONS, PAGE_SIZE, type SortOption } from '@/lib/constants'
 import {
   createDocument,
@@ -22,6 +23,11 @@ import {
 } from '@/services/firestore'
 import { slugify } from '@/lib/utils'
 import type { PaginatedResult, Product, ProductStatus } from '@/types'
+
+const moderateProduct = httpsCallable<
+  { productId: string; status: 'approved' | 'rejected' | 'archived'; reason?: string },
+  { status: 'approved' | 'rejected' | 'archived' }
+>(functions, 'moderateProduct')
 
 export const PRODUCT_MODERATION_FIELDS = [
   'name',
@@ -266,11 +272,13 @@ async getBySlug(slug: string) {
   },
 
   async setStatus(id: string, status: ProductStatus, rejectionReason?: string) {
-    await updateDocument(COLLECTIONS.products, id, {
-      status,
-      rejectionReason: rejectionReason ?? '',
-      ...(status !== 'approved' ? { publiclyVisible: false } : {}),
-      ...(status === 'approved' ? { publishedAt: Date.now() } : {}),
+    if (!['approved', 'rejected', 'archived'].includes(status)) {
+      throw new Error('Product moderation status is invalid.')
+    }
+    await moderateProduct({
+      productId: id,
+      status: status as 'approved' | 'rejected' | 'archived',
+      ...(rejectionReason ? { reason: rejectionReason } : {}),
     })
   },
 

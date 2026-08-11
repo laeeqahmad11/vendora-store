@@ -27,6 +27,7 @@ const FIRESTORE_PORT = 8080
 const FUNCTIONS_PORT = 5001
 const PASSWORD = 'VendoraProducts!123'
 const checkoutUrl = `http://${HOST}:${FUNCTIONS_PORT}/${PROJECT_ID}/us-central1/placeOrders`
+const moderationUrl = `http://${HOST}:${FUNCTIONS_PORT}/${PROJECT_ID}/us-central1/moderateProduct`
 
 if (
   PROJECT_ID !== 'demo-vendora-e2e' ||
@@ -123,6 +124,21 @@ async function invokeCheckout(productId, token) {
     }),
   })
   return response.json()
+}
+
+async function invokeModeration(data, token) {
+  const response = await fetch(moderationUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ data }),
+  })
+  const payload = await response.json()
+  if (payload.error) {
+    const error = new Error(payload.error.message)
+    error.status = payload.error.status
+    throw error
+  }
+  return payload.result
 }
 
 async function waitForProduct(id, predicate, timeout = 10_000) {
@@ -307,9 +323,14 @@ test('pending checkout is rejected, admin reapproval republishes, and order snap
   const rejectedCheckout = await invokeCheckout('lifecycle', clients.customer.token)
   assert.equal(rejectedCheckout.error?.status, 'FAILED_PRECONDITION')
 
-  await updateDoc(doc(clients.admin.firestore, 'products/lifecycle'), {
+  await assert.rejects(updateDoc(doc(clients.admin.firestore, 'products/lifecycle'), {
     status: 'approved', rejectionReason: '', publishedAt: serverTimestamp(), updatedAt: serverTimestamp(),
-  })
+  }))
+  const moderation = await invokeModeration(
+    { productId: 'lifecycle', status: 'approved' },
+    clients.admin.token,
+  )
+  assert.equal(moderation.status, 'approved')
   const republished = await waitForProduct(
     'lifecycle',
     (value) => value.status === 'approved' && value.publiclyVisible === true,
@@ -321,4 +342,35 @@ test('pending checkout is rejected, admin reapproval republishes, and order snap
   const historical = (await adminDb.doc('orders/historical-order').get()).data()
   assert.deepEqual(historical.items, orderSnapshot.items)
   assert.equal(historical.total, 100)
+
+  const notifications = await adminDb.collection('notifications')
+    .where('title', '==', 'Product approved').get()
+  assert.equal(notifications.size, 1)
+  assert.equal(notifications.docs[0].get('userId'), 'product-merchant')
+  assert.match(notifications.docs[0].get('body'), /Lifecycle product v2/)
+})
+
+test('product rejection is trusted, notifies the merchant, and rejects non-admin callers', async () => {
+  const result = await invokeModeration(
+    { productId: 'pending', status: 'rejected', reason: 'Image policy violation' },
+    clients.admin.token,
+  )
+  assert.equal(result.status, 'rejected')
+  const productAfter = (await adminDb.doc('products/pending').get()).data()
+  assert.equal(productAfter.status, 'rejected')
+  assert.equal(productAfter.rejectionReason, 'Image policy violation')
+  const notifications = await adminDb.collection('notifications')
+    .where('title', '==', 'Product rejected').get()
+  assert.equal(notifications.size, 1)
+  assert.equal(notifications.docs[0].get('userId'), 'product-merchant')
+  assert.match(notifications.docs[0].get('body'), /Image policy violation/)
+
+  await assert.rejects(
+    invokeModeration({ productId: 'draft', status: 'approved' }, clients.customer.token),
+    (error) => error.status === 'PERMISSION_DENIED',
+  )
+  await assert.rejects(
+    invokeModeration({ productId: 'draft', status: 'approved' }, clients.suspended.token),
+    (error) => error.status === 'PERMISSION_DENIED',
+  )
 })

@@ -156,6 +156,8 @@ async function seed() {
     ['cash-valid', order('cash-valid', 'delivered')],
     ['cash-invalid', order('cash-invalid', 'confirmed')],
     ['duplicate', order('duplicate', 'pending')],
+    ['cancel-customer', order('cancel-customer', 'pending')],
+    ['cancel-merchant', order('cancel-merchant', 'confirmed')],
     ['direct', order('direct', 'pending')],
     ['admin-valid', order('admin-valid', 'pending')],
     ['admin-suspended', order('admin-suspended', 'pending')],
@@ -226,6 +228,10 @@ test('customer refund request is server-authoritative and only valid after deliv
   assert.equal(valid.status, 'refund_requested')
   assert.equal(valid.returnReason, 'Item was damaged')
   assert.equal(valid.timeline.at(-1).status, 'refund_requested')
+  const merchantNotification = await adminDb.collection('notifications')
+    .where('linkUrl', '==', '/merchant/orders/refund-valid').get()
+  assert.equal(merchantNotification.size, 1)
+  assert.equal(merchantNotification.docs[0].get('userId'), 'orders-merchant-1')
 
   const deliveredResult = await invoke(
     'requestOrderRefund',
@@ -262,6 +268,11 @@ test('return approval and decline require refund_requested', async () => {
   )
   assert.equal(approved.status, 'returned')
   assert.equal((await adminDb.doc('orders/return-approve').get()).get('status'), 'returned')
+  const approvalNotification = await adminDb.collection('notifications')
+    .where('linkUrl', '==', '/account/orders/return-approve').get()
+  assert.equal(approvalNotification.size, 1)
+  assert.equal(approvalNotification.docs[0].get('userId'), 'orders-customer-1')
+  assert.match(approvalNotification.docs[0].get('body'), /approved/i)
 
   const declined = await invoke(
     'decideOrderReturn',
@@ -269,6 +280,11 @@ test('return approval and decline require refund_requested', async () => {
     clients.merchant1.token,
   )
   assert.equal(declined.status, 'completed')
+  const declineNotification = await adminDb.collection('notifications')
+    .where('linkUrl', '==', '/account/orders/return-decline').get()
+  assert.equal(declineNotification.size, 1)
+  assert.equal(declineNotification.docs[0].get('userId'), 'orders-customer-1')
+  assert.match(declineNotification.docs[0].get('body'), /declined/i)
 
   await expectCallableError(
     invoke(
@@ -294,6 +310,10 @@ test('COD cash confirmation requires an uncollected delivered COD order', async 
   const orderAfter = (await adminDb.doc('orders/cash-valid').get()).data()
   assert.equal(orderAfter.timeline.at(-2).status, 'cash_received')
   assert.equal(orderAfter.timeline.at(-1).status, 'completed')
+  const completionNotification = await adminDb.collection('notifications')
+    .where('linkUrl', '==', '/account/orders/cash-valid').get()
+  assert.equal(completionNotification.size, 1)
+  assert.equal(completionNotification.docs[0].get('userId'), 'orders-customer-1')
 
   await expectCallableError(
     invoke('confirmOrderCash', { orderId: 'cash-invalid' }, clients.merchant1.token),
@@ -326,6 +346,33 @@ test('duplicate transition produces no duplicate timeline or activity entry', as
   assert.equal(orderAfter.timeline.filter((entry) => entry.status === 'confirmed').length, 1)
   const activities = await adminDb.collection('activityLogs').where('targetId', '==', 'duplicate').get()
   assert.equal(activities.size, 1)
+  const fulfillmentNotification = await adminDb.collection('notifications')
+    .where('linkUrl', '==', '/account/orders/duplicate').get()
+  assert.equal(fulfillmentNotification.size, 1)
+  assert.equal(fulfillmentNotification.docs[0].get('userId'), 'orders-customer-1')
+  assert.match(fulfillmentNotification.docs[0].get('body'), /confirmed/i)
+})
+
+test('cancellation notification recipient follows the cancelling actor', async () => {
+  await invoke(
+    'cancelOrder',
+    { orderId: 'cancel-customer', reason: 'Customer changed their mind' },
+    clients.customer1.token,
+  )
+  const merchantNotification = await adminDb.collection('notifications')
+    .where('linkUrl', '==', '/merchant/orders/cancel-customer').get()
+  assert.equal(merchantNotification.size, 1)
+  assert.equal(merchantNotification.docs[0].get('userId'), 'orders-merchant-1')
+
+  await invoke(
+    'cancelOrder',
+    { orderId: 'cancel-merchant', reason: 'Merchant cannot fulfill the order' },
+    clients.merchant1.token,
+  )
+  const customerNotification = await adminDb.collection('notifications')
+    .where('linkUrl', '==', '/account/orders/cancel-merchant').get()
+  assert.equal(customerNotification.size, 1)
+  assert.equal(customerNotification.docs[0].get('userId'), 'orders-customer-1')
 })
 
 test('browser clients cannot directly mutate lifecycle, financial, timeline, or activity authority', async () => {
