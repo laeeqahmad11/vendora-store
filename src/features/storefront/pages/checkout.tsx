@@ -36,6 +36,7 @@ import {
 
 import { cn, formatCurrency, getErrorMessage } from '@/lib/utils'
 import { allocateCouponDiscount } from '@/lib/coupons'
+import { placeOrdersDurably } from '@/lib/checkout-idempotency'
 import type { CartItem } from '@/types'
 
 const checkoutSchema = z.object({
@@ -71,6 +72,9 @@ export default function CheckoutPage() {
   const setCoupon = useCartStore((state) => state.setCoupon)
 
   const giftNote = useCartStore((state) => state.giftNote)
+  const checkoutSessionId = useCartStore(
+    (state) => state.checkoutSessionId,
+  )
   const clearCart = useCartStore((state) => state.clear)
 
   const [couponCode, setCouponCode] = React.useState(
@@ -84,8 +88,6 @@ export default function CheckoutPage() {
   >(null)
 
   const placedRef = React.useRef(false)
-  const checkoutRequestIdRef = React.useRef(crypto.randomUUID())
-
   React.useEffect(() => {
     if (initialized && !firebaseUser) {
       navigate('/auth/login', {
@@ -352,26 +354,32 @@ export default function CheckoutPage() {
         country: values.country,
       }
 
-      const result = await checkoutService.placeOrders({
-        items: activeItems.map((item) => ({
-          productId: item.productId,
-          quantity: item.quantity,
-          ...(item.variantId ? { variantId: item.variantId } : {}),
-        })),
-        delivery: {
-          fullName: values.fullName,
-          email: values.email,
-          phone: values.phone,
-          address: shippingAddress,
+      const result = await placeOrdersDurably(
+        firebaseUser.uid,
+        checkoutSessionId,
+        {
+          items: activeItems.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            ...(item.variantId ? { variantId: item.variantId } : {}),
+          })),
+          delivery: {
+            fullName: values.fullName,
+            email: values.email,
+            phone: values.phone,
+            address: shippingAddress,
+          },
+          ...(coupon?.coupon.code
+            ? { couponCode: coupon.coupon.code }
+            : {}),
+          paymentMethod: 'cod',
+          ...(values.specialInstructions
+            ? { specialInstructions: values.specialInstructions }
+            : {}),
+          ...(giftNote ? { giftNote } : {}),
         },
-        ...(coupon?.coupon.code ? { couponCode: coupon.coupon.code } : {}),
-        paymentMethod: 'cod',
-        ...(values.specialInstructions
-          ? { specialInstructions: values.specialInstructions }
-          : {}),
-        ...(giftNote ? { giftNote } : {}),
-        idempotencyKey: checkoutRequestIdRef.current,
-      })
+        checkoutService.placeOrders,
+      )
 
       if (saveAddress) {
         await usersService

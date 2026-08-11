@@ -173,12 +173,26 @@ async function seed() {
       shippingFee: 5,
       freeShippingThreshold: 0,
     }),
+    adminDb.doc('stores/checkout-store-suspension').set({
+      ownerId: 'checkout-merchant-1',
+      name: 'Checkout Suspension Fixture',
+      status: 'approved',
+      shippingEnabled: true,
+      shippingFee: 0,
+      freeShippingThreshold: 0,
+    }),
   ])
 
   const products = [
     ['valid', product('valid')],
     ['forged', product('forged', { price: 120 })],
     ['stale', product('stale', { stock: 0 })],
+    [
+      'store-suspension',
+      product('store-suspension', {
+        storeId: 'checkout-store-suspension',
+      }),
+    ],
     ['atomic-good', product('atomic-good', { price: 30, stock: 5 })],
     ['atomic-bad', product('atomic-bad', { price: 40, stock: 0 })],
     ['replay', product('replay', { price: 75, stock: 3 })],
@@ -378,15 +392,21 @@ test('stale stock and multi-item partial failure create no side effects', async 
 })
 
 test('trusted checkout rejects products from a non-operational store without side effects', async () => {
-  const storeRef = adminDb.doc('stores/checkout-store-1')
-  const productRef = adminDb.doc('products/valid')
+  // This store/product pair is intentionally isolated. Visibility syncing is
+  // asynchronous, so toggling the shared store could otherwise race with and
+  // invalidate fixtures used by later security tests.
+  const storeRef = adminDb.doc('stores/checkout-store-suspension')
+  const productRef = adminDb.doc('products/store-suspension')
   const beforeProduct = (await productRef.get()).data()
   const requestKey = 'suspended-store-denied-1'
 
   await storeRef.update({ status: 'suspended' })
   try {
     await expectCheckoutError(
-      invokeCheckout(intent([{ productId: 'valid', quantity: 1 }], requestKey), customerOne.token),
+      invokeCheckout(
+        intent([{ productId: 'store-suspension', quantity: 1 }], requestKey),
+        customerOne.token,
+      ),
       'FAILED_PRECONDITION',
       /stores are unavailable/i,
     )

@@ -6,6 +6,7 @@ interface CartState {
   items: CartItem[]
   coupon: { coupon: Coupon; discount: number } | null
   giftNote: string
+  checkoutSessionId: string
   addItem: (item: CartItem) => void
   updateQuantity: (productId: string, variantId: string | undefined, quantity: number) => void
   removeItem: (productId: string, variantId?: string) => void
@@ -23,6 +24,7 @@ export const useCartStore = create<CartState>()(
       items: [],
       coupon: null,
       giftNote: '',
+      checkoutSessionId: crypto.randomUUID(),
 
       addItem: (item) =>
         set((state) => {
@@ -66,7 +68,13 @@ export const useCartStore = create<CartState>()(
 
       setCoupon: (coupon) => set({ coupon }),
       setGiftNote: (giftNote) => set({ giftNote }),
-      clear: () => set({ items: [], coupon: null, giftNote: '' }),
+      clear: () =>
+        set({
+          items: [],
+          coupon: null,
+          giftNote: '',
+          checkoutSessionId: crypto.randomUUID(),
+        }),
     }),
     { name: 'vendora-cart' },
   ),
