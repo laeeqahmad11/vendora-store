@@ -146,6 +146,13 @@ test('profile validation, editing, persistence, sign-in persistence, and account
   ).toBeVisible()
 
   await phone.fill('03221234567')
+  await page
+    .locator('input[type="file"]')
+    .setInputFiles(path.resolve('tests/fixtures/assets/product.png'))
+  await expect(page.getByRole('img', { name: 'Upload 1', exact: true })).toHaveAttribute(
+    'src',
+    /^data:image\/jpeg;base64,/,
+  )
   await page.getByRole('button', { name: 'Save changes', exact: true }).click()
   await expect(page.getByText('Profile updated', { exact: true })).toBeVisible()
 
@@ -153,6 +160,10 @@ test('profile validation, editing, persistence, sign-in persistence, and account
   await expect(displayName).toHaveValue('E2E Account Customer')
   await expect(phone).toHaveValue('03221234567')
   await expect(email).toHaveValue(customer.email)
+  await expect(page.getByRole('img', { name: 'Upload 1', exact: true })).toHaveAttribute(
+    'src',
+    /^data:image\/jpeg;base64,/,
+  )
 
   await page.getByRole('link', { name: 'Orders', exact: true }).click()
   await expect(page).toHaveURL('/account/orders')
@@ -172,6 +183,10 @@ test('profile validation, editing, persistence, sign-in persistence, and account
   await expect(page).toHaveURL('/account')
   await expect(displayName).toHaveValue('E2E Account Customer')
   await expect(phone).toHaveValue('03221234567')
+  await expect(page.getByRole('img', { name: 'Upload 1', exact: true })).toHaveAttribute(
+    'src',
+    /^data:image\/jpeg;base64,/,
+  )
 })
 
 test('address validation, CRUD, default changes, reload, and sign-in persistence', async ({

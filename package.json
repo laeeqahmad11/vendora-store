@@ -27,6 +27,7 @@
     "test:security:products": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only auth,firestore,functions \"node --test tests/security/product-moderation-backend.node.mjs\"",
     "test:security:notifications": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only firestore \"node --test tests/security/notifications.rules.node.mjs\"",
     "test:security:notifications:support": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only auth,firestore,functions \"node --test tests/security/support-notifications-backend.node.mjs\"",
+    "test:security:storage": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only storage \"node --test tests/security/storage.rules.node.mjs\"",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:report": "playwright show-report"
   },

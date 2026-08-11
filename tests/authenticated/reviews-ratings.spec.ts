@@ -205,9 +205,20 @@ test('reviews publish, aggregate, persist, repeat, reply, moderate, and delete t
 
     await form.getByPlaceholder('Review title (optional)', { exact: true }).fill(firstReview.title)
     await comment.fill(firstReview.comment)
+    await form
+      .locator('input[type="file"]')
+      .setInputFiles(path.resolve('tests/fixtures/assets/product.png'))
+    await expect(form.getByRole('img', { name: 'Upload 1', exact: true })).toHaveAttribute(
+      'src',
+      /^data:image\/jpeg;base64,/,
+    )
     await form.getByRole('button', { name: 'Submit review', exact: true }).click()
     await expect(customerPage.getByText('Thanks for your review!', { exact: true })).toBeVisible()
     await expect(customerPage.getByText(firstReview.comment, { exact: true })).toBeVisible()
+    await expect(customerPage.getByRole('img', { name: 'Review', exact: true }).first()).toHaveAttribute(
+      'src',
+      /^data:image\/jpeg;base64,/,
+    )
     await expectAggregate(5, 1)
 
     await expect
@@ -237,6 +248,10 @@ test('reviews publish, aggregate, persist, repeat, reply, moderate, and delete t
     await expect(customerPage.getByRole('tab', { name: 'Reviews (1)', exact: true })).toBeVisible()
     await customerPage.getByRole('tab', { name: 'Reviews (1)', exact: true }).click()
     await expect(customerPage.getByText(firstReview.comment, { exact: true })).toBeVisible()
+    await expect(customerPage.getByRole('img', { name: 'Review', exact: true }).first()).toHaveAttribute(
+      'src',
+      /^data:image\/jpeg;base64,/,
+    )
 
     const repeatForm = reviewForm(customerPage)
     await repeatForm.getByRole('button', { name: '4 stars', exact: true }).click()
