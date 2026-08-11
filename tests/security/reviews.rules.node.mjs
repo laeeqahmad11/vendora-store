@@ -78,11 +78,12 @@ async function seedFirestore() {
       setDoc(doc(db, 'users/merchant-1'), { role: 'merchant' }),
       setDoc(doc(db, 'users/merchant-2'), { role: 'merchant' }),
       setDoc(doc(db, 'users/admin-1'), { role: 'admin' }),
-      setDoc(doc(db, 'stores/store-owned'), { ownerId: 'merchant-1' }),
-      setDoc(doc(db, 'stores/store-foreign'), { ownerId: 'merchant-2' }),
+      setDoc(doc(db, 'stores/store-owned'), { ownerId: 'merchant-1', status: 'approved' }),
+      setDoc(doc(db, 'stores/store-foreign'), { ownerId: 'merchant-2', status: 'approved' }),
       setDoc(doc(db, 'products/product-owned'), {
         storeId: 'store-owned',
         status: 'approved',
+        publiclyVisible: true,
         rating: 5,
         ratingCount: 5,
         ratingSum: 25,
@@ -90,6 +91,7 @@ async function seedFirestore() {
       setDoc(doc(db, 'products/product-foreign'), {
         storeId: 'store-foreign',
         status: 'approved',
+        publiclyVisible: true,
         rating: 5,
         ratingCount: 1,
         ratingSum: 5,
@@ -97,6 +99,7 @@ async function seedFirestore() {
       setDoc(doc(db, 'products/product-draft'), {
         storeId: 'store-owned',
         status: 'draft',
+        publiclyVisible: false,
         rating: 0,
         ratingCount: 0,
         ratingSum: 0,
@@ -104,6 +107,7 @@ async function seedFirestore() {
       setDoc(doc(db, 'products/product-helpful'), {
         storeId: 'store-owned',
         status: 'approved',
+        publiclyVisible: true,
         rating: 5,
         ratingCount: 2,
         ratingSum: 10,
@@ -111,6 +115,7 @@ async function seedFirestore() {
       setDoc(doc(db, 'products/product-integrity'), {
         storeId: 'store-owned',
         status: 'approved',
+        publiclyVisible: true,
         rating: 0,
         ratingCount: 0,
         ratingSum: 0,
@@ -118,6 +123,7 @@ async function seedFirestore() {
       setDoc(doc(db, 'products/product-create'), {
         storeId: 'store-owned',
         status: 'approved',
+        publiclyVisible: true,
         rating: 0,
         ratingCount: 0,
         ratingSum: 0,

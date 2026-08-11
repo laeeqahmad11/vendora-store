@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { getApps, initializeApp } from 'firebase-admin/app'
 import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore'
 import { logger } from 'firebase-functions'
+import { onDocumentWritten } from 'firebase-functions/v2/firestore'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
 
 if (!getApps().length) initializeApp()
@@ -19,6 +20,146 @@ const ORDER_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 const productUnavailableMessage =
   'One or more products are unavailable or their stock changed. Please review your cart and try again.'
+
+/**
+ * Keep the queryable publication bit synchronized with authoritative product
+ * approval and store status. Restrictive moderation clears this bit before the
+ * status transaction; approval sets it only after that transaction commits.
+ */
+export const syncProductPublicVisibility = onDocumentWritten(
+  { document: 'products/{productId}', region: REGION },
+  async (event) => {
+    const after = event.data?.after
+    if (!after?.exists) return
+    const product = after.data()
+    if (!product?.storeId) return
+    const store = await db.doc(`stores/${product.storeId}`).get()
+    const publiclyVisible = product.status === 'approved' && store.exists && store.data()?.status === 'approved'
+    if (product.publiclyVisible !== publiclyVisible) {
+      await after.ref.update({ publiclyVisible, updatedAt: FieldValue.serverTimestamp() })
+    }
+  },
+)
+
+async function setStoreProductsPublicVisibility(storeId, storeApproved) {
+  const products = await db.collection('products').where('storeId', '==', storeId).get()
+  if (products.empty) return
+  const writer = db.bulkWriter()
+  for (const product of products.docs) {
+    const publiclyVisible = storeApproved && product.data().status === 'approved'
+    if (product.data().publiclyVisible !== publiclyVisible) {
+      writer.update(product.ref, { publiclyVisible, updatedAt: FieldValue.serverTimestamp() })
+    }
+  }
+  await writer.close()
+}
+
+const PUBLIC_STORE_FIELDS = [
+  'ownerId', 'name', 'slug', 'description', 'logoUrl', 'bannerUrl',
+  'socialLinks', 'status', 'verified', 'rating', 'ratingCount',
+  'productCount', 'totalSales', 'seo', 'businessHours', 'shippingPolicy',
+  'shippingEnabled', 'shippingFee', 'freeShippingThreshold',
+  'estimatedDeliveryDays', 'createdAt', 'updatedAt',
+]
+
+function publicStoreProjection(store) {
+  return Object.fromEntries(
+    PUBLIC_STORE_FIELDS
+      .filter((field) => store[field] !== undefined)
+      .map((field) => [field, store[field]]),
+  )
+}
+
+async function syncPublicStoreProjection(storeId, store) {
+  const publicRef = db.doc(`publicStores/${storeId}`)
+  if (!store || store.status !== 'approved') {
+    await publicRef.delete()
+    return
+  }
+  await publicRef.set(publicStoreProjection(store))
+}
+
+export const syncStoreProductVisibility = onDocumentWritten(
+  { document: 'stores/{storeId}', region: REGION },
+  async (event) => {
+    const beforeStatus = event.data?.before.exists ? event.data.before.data()?.status : undefined
+    const afterStore = event.data?.after.exists ? event.data.after.data() : undefined
+    const afterStatus = afterStore?.status
+
+    await syncPublicStoreProjection(event.params.storeId, afterStore)
+    if (beforeStatus === afterStatus) return
+
+    await setStoreProductsPublicVisibility(event.params.storeId, afterStatus === 'approved')
+  },
+)
+
+export const moderateStore = onCall(
+  {
+    region: REGION,
+    timeoutSeconds: 120,
+    memory: '256MiB',
+    enforceAppCheck:
+      process.env.FUNCTIONS_EMULATOR !== 'true' && process.env.CHECKOUT_ENFORCE_APP_CHECK === 'true',
+  },
+  async (request) => {
+    const adminId = request.auth?.uid
+    if (!adminId) fail('unauthenticated', 'Sign in to moderate stores.')
+    if (!isObject(request.data)) fail('invalid-argument', 'Store moderation request is invalid.')
+    const storeId = cleanIdentifier(request.data.storeId, 'Store ID')
+    const status = request.data.status
+    if (!['approved', 'rejected', 'suspended'].includes(status)) {
+      fail('invalid-argument', 'Store status is invalid.')
+    }
+    const reason = cleanString(request.data.reason, 'Reason', 1, 2000, { optional: true })
+    const admin = await db.doc(`users/${adminId}`).get()
+    if (!admin.exists || admin.data()?.role !== 'admin' || admin.data()?.suspended === true) {
+      fail('permission-denied', 'Active administrator access is required.')
+    }
+
+    const storeRef = db.doc(`stores/${storeId}`)
+    const applicationRef = db.doc(`merchantApplications/${storeId}`)
+    const publicStoreRef = db.doc(`publicStores/${storeId}`)
+    const storeSnapshot = await storeRef.get()
+    if (!storeSnapshot.exists) fail('not-found', 'Store was not found.')
+
+    // Hide first on restrictive transitions. Approval reverses the order so
+    // products can never lead the authoritative store status.
+    if (status !== 'approved') await setStoreProductsPublicVisibility(storeId, false)
+
+    await db.runTransaction(async (transaction) => {
+      const [store, application] = await Promise.all([
+        transaction.get(storeRef),
+        transaction.get(applicationRef),
+      ])
+      if (!store.exists || !application.exists) {
+        fail('failed-precondition', 'Store application migration is incomplete.')
+      }
+      transaction.update(storeRef, { status, updatedAt: FieldValue.serverTimestamp() })
+      transaction.update(applicationRef, {
+        status,
+        rejectionReason: reason ?? '',
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+      if (status === 'approved') {
+        transaction.set(publicStoreRef, publicStoreProjection({
+          ...store.data(),
+          status,
+          updatedAt: FieldValue.serverTimestamp(),
+        }))
+        transaction.update(db.doc(`users/${store.data().ownerId}`), {
+          role: 'merchant',
+          storeId,
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+      } else {
+        transaction.delete(publicStoreRef)
+      }
+    })
+
+    if (status === 'approved') await setStoreProductsPublicVisibility(storeId, true)
+    return { status }
+  },
+)
 
 function fail(code, message) {
   throw new HttpsError(code, message)

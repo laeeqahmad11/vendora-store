@@ -7,6 +7,8 @@ export const APP_TAGLINE = 'The multi-vendor marketplace for modern brands'
 export const COLLECTIONS = {
   users: 'users',
   stores: 'stores',
+  publicStores: 'publicStores',
+  merchantApplications: 'merchantApplications',
   products: 'products',
   categories: 'categories',
   brands: 'brands',

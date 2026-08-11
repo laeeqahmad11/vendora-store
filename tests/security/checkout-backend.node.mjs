@@ -52,6 +52,7 @@ function product(id, overrides = {}) {
     minOrderQty: 1,
     maxOrderQty: 5,
     status: 'approved',
+    publiclyVisible: true,
     soldCount: 0,
     ...overrides,
   }
@@ -369,6 +370,38 @@ test('stale stock and multi-item partial failure create no side effects', async 
     ),
     false,
   )
+})
+
+test('trusted checkout rejects products from a non-operational store without side effects', async () => {
+  const storeRef = adminDb.doc('stores/checkout-store-1')
+  const productRef = adminDb.doc('products/valid')
+  const beforeProduct = (await productRef.get()).data()
+  const requestKey = 'suspended-store-denied-1'
+
+  await storeRef.update({ status: 'suspended' })
+  try {
+    await expectCheckoutError(
+      invokeCheckout(intent([{ productId: 'valid', quantity: 1 }], requestKey), customerOne.token),
+      'FAILED_PRECONDITION',
+      /stores are unavailable/i,
+    )
+    const [afterProduct, checkoutRequests] = await Promise.all([
+      productRef.get(),
+      adminDb.collection('checkoutRequests')
+        .where('customerId', '==', 'checkout-customer-1')
+        .get(),
+    ])
+    assert.equal(afterProduct.data().stock, beforeProduct.stock)
+    assert.equal(afterProduct.data().soldCount, beforeProduct.soldCount)
+    assert.equal(
+      checkoutRequests.docs.some(
+        (item) => item.get('idempotencyKeyHash') === idempotencyKeyHash(requestKey),
+      ),
+      false,
+    )
+  } finally {
+    await storeRef.update({ status: 'approved' })
+  }
 })
 
 test('idempotency makes exact replay safe and rejects key reuse with different intent', async () => {

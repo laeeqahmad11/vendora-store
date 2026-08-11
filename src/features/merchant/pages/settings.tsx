@@ -68,6 +68,7 @@ type FormValues = z.infer<typeof schema>
 
 export default function StoreSettingsPage() {
   const { store } = useMerchant()
+  const application = useAuthStore((state) => state.application)
 
   const refreshStore = useAuthStore(
     (state) => state.refreshStore,
@@ -95,11 +96,11 @@ export default function StoreSettingsPage() {
     defaultValues: {
       name: store.name,
       description: store.description,
-      email: store.email,
-      phone: store.phone,
-      address: store.address ?? '',
+      email: application?.email ?? '',
+      phone: application?.phone ?? '',
+      address: application?.address ?? '',
       businessName:
-        store.businessName ?? '',
+        application?.businessName ?? '',
       businessHours:
         store.businessHours ?? '',
       shippingPolicy:
@@ -151,12 +152,6 @@ export default function StoreSettingsPage() {
       await storesService.update(store.id, {
         name: values.name,
         description: values.description,
-        email: values.email,
-        phone: values.phone,
-        address:
-          values.address || undefined,
-        businessName:
-          values.businessName || undefined,
         businessHours:
           values.businessHours || undefined,
         shippingPolicy:
@@ -222,6 +217,13 @@ export default function StoreSettingsPage() {
                   : {}),
               }
             : undefined,
+      })
+
+      await storesService.updateApplication(store.id, {
+        email: values.email,
+        phone: values.phone,
+        address: values.address ?? '',
+        businessName: values.businessName ?? '',
       })
 
       await refreshStore()

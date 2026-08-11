@@ -35,7 +35,7 @@ import { useRealtimeCollection } from '@/hooks/use-realtime'
 import { LiveBadge } from '@/components/shared/live-badge'
 import { COLLECTIONS, STORE_STATUS_COLORS, STORE_STATUS_LABELS } from '@/lib/constants'
 import { cn, formatDate, getErrorMessage } from '@/lib/utils'
-import type { Store, StoreStatus } from '@/types'
+import type { MerchantApplication, Store, StoreStatus } from '@/types'
 import { useAdminActor } from '../components/hooks'
 
 const TABS: { value: StoreStatus | 'all'; label: string }[] = [
@@ -47,10 +47,19 @@ const TABS: { value: StoreStatus | 'all'; label: string }[] = [
 ]
 
 export default function MerchantsPage() {
-  const [selected, setSelected] = React.useState<Store | null>(null)
+  const [selected, setSelected] = React.useState<(Store & { application?: MerchantApplication }) | null>(null)
   // Live subscription — new store applications appear the moment they're submitted
   const storesQ = useRealtimeCollection<Store>(COLLECTIONS.stores, [orderBy('createdAt', 'desc')], [])
-  const stores = storesQ.data ?? []
+  const applicationsQ = useRealtimeCollection<MerchantApplication>(
+    COLLECTIONS.merchantApplications,
+    [orderBy('createdAt', 'desc')],
+    [],
+  )
+  const applicationsByStore = new Map((applicationsQ.data ?? []).map((application) => [application.storeId, application]))
+  const stores = (storesQ.data ?? []).map((store) => ({
+    ...store,
+    application: applicationsByStore.get(store.id),
+  }))
   const pendingCount = stores.filter((s) => s.status === 'pending').length
 
   return (
@@ -99,7 +108,13 @@ export default function MerchantsPage() {
   )
 }
 
-function StoresTable({ stores, onSelect }: { stores: Store[]; onSelect: (s: Store) => void }) {
+function StoresTable({
+  stores,
+  onSelect,
+}: {
+  stores: (Store & { application?: MerchantApplication })[]
+  onSelect: (s: Store & { application?: MerchantApplication }) => void
+}) {
   return (
     <Table>
       <TableHeader>
@@ -124,8 +139,8 @@ function StoresTable({ stores, onSelect }: { stores: Store[]; onSelect: (s: Stor
                 </span>
               </span>
             </TableCell>
-            <TableCell className="text-muted-foreground">{store.email}</TableCell>
-            <TableCell>{store.businessName || '—'}</TableCell>
+            <TableCell className="text-muted-foreground">{store.application?.email ?? '—'}</TableCell>
+            <TableCell>{store.application?.businessName || '—'}</TableCell>
             <TableCell className="whitespace-nowrap text-muted-foreground">{formatDate(store.createdAt)}</TableCell>
             <TableCell>
               <span
@@ -165,7 +180,13 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-function StoreDetailDialog({ store, onClose }: { store: Store; onClose: () => void }) {
+function StoreDetailDialog({
+  store,
+  onClose,
+}: {
+  store: Store & { application?: MerchantApplication }
+  onClose: () => void
+}) {
   const actor = useAdminActor()
   const qc = useQueryClient()
   const [confirm, setConfirm] = React.useState<'approve' | 'suspend' | 'unsuspend' | 'delete' | null>(null)
@@ -232,20 +253,20 @@ function StoreDetailDialog({ store, onClose }: { store: Store; onClose: () => vo
           </DialogHeader>
 
           <div className="space-y-2">
-            <InfoRow label="Owner" value={ownerQ.data ? `${ownerQ.data.displayName} (${ownerQ.data.email})` : store.email} />
-            <InfoRow label="Store email" value={store.email} />
-            <InfoRow label="Phone" value={store.phone} />
-            <InfoRow label="Business name" value={store.businessName} />
-            <InfoRow label="Address" value={store.address} />
+            <InfoRow label="Owner" value={ownerQ.data ? `${ownerQ.data.displayName} (${ownerQ.data.email})` : store.application?.email} />
+            <InfoRow label="Store email" value={store.application?.email} />
+            <InfoRow label="Phone" value={store.application?.phone} />
+            <InfoRow label="Business name" value={store.application?.businessName} />
+            <InfoRow label="Address" value={store.application?.address} />
             <InfoRow label="Description" value={store.description} />
             <InfoRow label="Applied" value={formatDate(store.createdAt, 'MMM D, YYYY h:mm A')} />
             <InfoRow label="Products" value={String(store.productCount)} />
             <InfoRow
               label="Business document"
               value={
-                store.businessDocumentUrl ? (
+                store.application?.businessDocumentUrl ? (
                   <a
-                    href={store.businessDocumentUrl}
+                    href={store.application.businessDocumentUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1 text-primary hover:underline"
@@ -257,7 +278,9 @@ function StoreDetailDialog({ store, onClose }: { store: Store; onClose: () => vo
                 )
               }
             />
-            {store.rejectionReason && <InfoRow label="Rejection reason" value={store.rejectionReason} />}
+            {store.application?.rejectionReason && (
+              <InfoRow label="Rejection reason" value={store.application.rejectionReason} />
+            )}
             <InfoRow
               label="Public page"
               value={

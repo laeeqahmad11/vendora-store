@@ -85,7 +85,22 @@ async function main() {
     },
   ]
   for (const s of stores) {
-    await db.doc(`stores/${s.id}`).set({ ...s, createdAt: now(), updatedAt: now() })
+    const { email, phone, businessName, ...publicStore } = s
+    const publicRecord = { ...publicStore, createdAt: now(), updatedAt: now() }
+    await db.doc(`stores/${s.id}`).set(publicRecord)
+    await db.doc(`publicStores/${s.id}`).set(publicRecord)
+    await db.doc(`merchantApplications/${s.id}`).set({
+      storeId: s.id,
+      ownerId: s.ownerId,
+      email,
+      phone,
+      address: 'Demo merchant address',
+      businessName,
+      status: 'approved',
+      rejectionReason: '',
+      createdAt: now(),
+      updatedAt: now(),
+    })
   }
   await db.doc(`users/${merchant1}`).set({ storeId: 'store-nova-tech' }, { merge: true })
   await db.doc(`users/${merchant2}`).set({ storeId: 'store-atelier' }, { merge: true })
@@ -101,7 +116,8 @@ async function main() {
     categoryId, subcategoryId: extra.subcategoryId ?? null, brandId: extra.brandId ?? 'brand-nova',
     tags: extra.tags ?? ['new'], specifications: extra.specs ?? [{ label: 'Warranty', value: '12 months' }],
     warranty: '12 months', returnPolicy: '14-day free returns', shippingInfo: 'Ships in 1–2 business days',
-    status: 'approved', featured: extra.featured ?? false, trending: extra.trending ?? false,
+    status: 'approved', publiclyVisible: true,
+    featured: extra.featured ?? false, trending: extra.trending ?? false,
     recommended: extra.recommended ?? false, flashSale: extra.flashSale ?? null,
     rating: Math.round((extra.rating ?? 4.2) * (extra.ratingCount ?? 12)) / (extra.ratingCount ?? 12),
     ratingCount: extra.ratingCount ?? 12,

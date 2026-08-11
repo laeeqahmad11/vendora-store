@@ -100,8 +100,8 @@ async function seed() {
         email: 'admin-1@example.test',
         displayName: 'Admin One',
       }),
-      setDoc(doc(db, 'stores/store-1'), { ownerId: 'merchant-1' }),
-      setDoc(doc(db, 'stores/store-2'), { ownerId: 'merchant-2' }),
+      setDoc(doc(db, 'stores/store-1'), { ownerId: 'merchant-1', status: 'approved' }),
+      setDoc(doc(db, 'stores/store-2'), { ownerId: 'merchant-2', status: 'approved' }),
       setDoc(doc(db, 'coupons/secure-coupon'), coupon({ storeId: 'store-1' })),
       setDoc(doc(db, 'coupons/foreign-coupon'), coupon({
         storeId: 'store-2',

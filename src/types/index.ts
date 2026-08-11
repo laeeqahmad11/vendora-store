@@ -47,14 +47,8 @@ export interface Store {
   description: string
   logoUrl?: string
   bannerUrl?: string
-  email: string
-  phone: string
-  address?: string
-  businessName?: string
-  businessDocumentUrl?: string
   socialLinks?: { facebook?: string; instagram?: string; twitter?: string; website?: string }
   status: StoreStatus
-  rejectionReason?: string
   verified?: boolean
   rating: number
   ratingCount: number
@@ -67,6 +61,22 @@ export interface Store {
   shippingFee?: number
   freeShippingThreshold?: number
   estimatedDeliveryDays?: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** Private merchant onboarding and review data. Never used by storefronts. */
+export interface MerchantApplication {
+  id: string
+  storeId: string
+  ownerId: string
+  email: string
+  phone: string
+  address: string
+  businessName: string
+  businessDocumentUrl?: string
+  status: StoreStatus
+  rejectionReason?: string
   createdAt: number
   updatedAt: number
 }
@@ -153,6 +163,8 @@ export interface Product {
   shippingInfo?: string
   relatedProductIds?: string[]
   status: ProductStatus
+  /** Server-maintained denormalization used by rules-compatible public queries. */
+  publiclyVisible: boolean
   rejectionReason?: string
   featured?: boolean
   trending?: boolean

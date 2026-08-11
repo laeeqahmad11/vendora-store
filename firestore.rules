@@ -48,16 +48,22 @@ service cloud.firestore {
       return get(userPath(request.auth.uid)).data;
     }
 
+    function isActiveUser() {
+      return currentUserExists()
+        && (!userDoc().keys().hasAny(['suspended'])
+            || userDoc().suspended == false);
+    }
+
     function isAdmin() {
-      return currentUserExists() && userDoc().role == 'admin';
+      return isActiveUser() && userDoc().role == 'admin';
     }
 
     function isMerchant() {
-      return currentUserExists() && userDoc().role == 'merchant';
+      return isActiveUser() && userDoc().role == 'merchant';
     }
 
     function isCustomer() {
-      return currentUserExists() && userDoc().role == 'customer';
+      return isActiveUser() && userDoc().role == 'customer';
     }
 
     function isSelf(uid) {
@@ -65,10 +71,28 @@ service cloud.firestore {
     }
 
     function ownsStore(storeId) {
-      return signedIn()
+      return isMerchant()
+        && storeId is string
+        && exists(storePath(storeId))
+        && get(storePath(storeId)).data.ownerId == request.auth.uid
+        && get(storePath(storeId)).data.status == 'approved';
+    }
+
+    function ownsStoreRecord(storeId) {
+      return isActiveUser()
         && storeId is string
         && exists(storePath(storeId))
         && get(storePath(storeId)).data.ownerId == request.auth.uid;
+    }
+
+    function ownsApplicationStore(storeId) {
+      return isActiveUser() && ownsStoreRecord(storeId);
+    }
+
+    function storeIsOperational(storeId) {
+      return storeId is string
+        && exists(storePath(storeId))
+        && get(storePath(storeId)).data.status == 'approved';
     }
 
     function validOrderStatus(status) {
@@ -246,6 +270,65 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
 
+    function validPublicStoreDocument(data) {
+      return data.keys().hasAll([
+          'ownerId', 'name', 'slug', 'description', 'status', 'verified',
+          'rating', 'ratingCount', 'productCount', 'totalSales',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'name', 'slug', 'description', 'logoUrl', 'bannerUrl',
+          'socialLinks', 'status', 'verified', 'rating', 'ratingCount',
+          'productCount', 'totalSales', 'seo', 'businessHours',
+          'shippingPolicy', 'shippingEnabled', 'shippingFee',
+          'freeShippingThreshold', 'estimatedDeliveryDays',
+          'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string
+        && data.name is string
+        && data.slug is string
+        && data.description is string
+        && data.status in ['pending', 'approved', 'rejected', 'suspended']
+        && data.verified is bool
+        && data.rating is number
+        && data.ratingCount is int
+        && data.productCount is int
+        && data.totalSales is number;
+    }
+
+    function validMerchantApplication(data) {
+      return data.keys().hasAll([
+          'storeId', 'ownerId', 'email', 'phone', 'address', 'businessName',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'storeId', 'ownerId', 'email', 'phone', 'address', 'businessName',
+          'businessDocumentUrl', 'status', 'rejectionReason',
+          'createdAt', 'updatedAt'
+        ])
+        && data.storeId is string
+        && data.ownerId is string
+        && data.email is string
+        && data.email.size() > 0
+        && data.email.size() <= 320
+        && data.phone is string
+        && data.phone.size() >= 6
+        && data.phone.size() <= 40
+        && data.address is string
+        && data.address.size() >= 5
+        && data.address.size() <= 500
+        && data.businessName is string
+        && data.businessName.size() >= 2
+        && data.businessName.size() <= 200
+        && (!data.keys().hasAny(['businessDocumentUrl'])
+            || (data.businessDocumentUrl is string
+                && data.businessDocumentUrl.size() <= 1048576))
+        && (!data.keys().hasAny(['rejectionReason'])
+            || (data.rejectionReason is string
+                && data.rejectionReason.size() <= 2000))
+        && data.status in ['pending', 'approved', 'rejected', 'suspended'];
+    }
+
     function validAddress(data) {
       return data.keys().hasAll([
           'label', 'fullName', 'phone', 'line1', 'city', 'province',
@@ -331,7 +414,7 @@ service cloud.firestore {
       let contributesAfter = existsAfterWrite
         && getAfter(reviewPath(reviewId)).data.productId == productId
         && getAfter(reviewPath(reviewId)).data.status == 'approved';
-      return signedIn()
+      return isActiveUser()
         && reviewId is string
         && validProductAggregate(resource.data)
         && validProductAggregate(request.resource.data)
@@ -415,7 +498,7 @@ service cloud.firestore {
     }
 
     function validMerchantReviewUpdate(reviewId) {
-      return signedIn()
+      return isActiveUser()
         && ownsStore(resource.data.storeId)
         && request.resource.data.updatedAt == request.time
         && (
@@ -431,7 +514,7 @@ service cloud.firestore {
     }
 
     function validReviewInteraction(reviewId) {
-      return signedIn()
+      return isActiveUser()
         && resource.data.status == 'approved'
         && request.resource.data.updatedAt == request.time
         && (
@@ -497,60 +580,146 @@ service cloud.firestore {
       // Email/verification, role, suspended, storeId and createdAt are managed
       // by Firebase Auth or the platform, never by customer profile writes.
       allow update: if isAdmin()
-        || (isSelf(uid) && validSelfProfileUpdate());
+        || (isActiveUser() && isSelf(uid) && validSelfProfileUpdate());
 
       allow delete: if isAdmin();
 
       match /addresses/{addressId} {
         allow read: if isSelf(uid);
-        allow create: if isSelf(uid) && validAddressCreate();
-        allow update: if isSelf(uid) && validAddressUpdate();
-        allow delete: if isSelf(uid);
+        allow create: if isActiveUser() && isSelf(uid) && validAddressCreate();
+        allow update: if isActiveUser() && isSelf(uid) && validAddressUpdate();
+        allow delete: if isActiveUser() && isSelf(uid);
       }
     }
 
     // ------------------------------------------------------------- stores
     match /stores/{storeId} {
-      allow read: if true;
+      // Public reads return the entire document, so approved records must
+      // conform to the public-only schema. Public collection queries use the
+      // trusted publicStores projection because queries cannot prove allowlists.
+      allow get: if (resource.data.status == 'approved'
+            && validPublicStoreDocument(resource.data))
+        || isAdmin()
+        || (signedIn() && resource.data.ownerId == request.auth.uid);
+      allow list: if isAdmin()
+        || (signedIn() && resource.data.ownerId == request.auth.uid);
 
-      allow create: if signedIn()
+      allow create: if isCustomer()
         && request.resource.data.ownerId == request.auth.uid
+        && validPublicStoreDocument(request.resource.data)
         && request.resource.data.status == 'pending'
-        && request.resource.data.verified != true;
+        && request.resource.data.verified == false
+        && request.resource.data.rating == 0
+        && request.resource.data.ratingCount == 0
+        && request.resource.data.productCount == 0
+        && request.resource.data.totalSales == 0
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && existsAfter(
+             /databases/$(database)/documents/merchantApplications/$(storeId)
+           )
+        && getAfter(
+             /databases/$(database)/documents/merchantApplications/$(storeId)
+           ).data.ownerId == request.auth.uid;
 
-      // Owners can edit store profile/shipping fields only.
-      // Admin controls ownerId, approval, verification and counters.
-      allow update: if isAdmin()
+      // Active approved merchants can edit public profile/shipping fields only.
+      allow update: if (isAdmin()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'verified', 'rating', 'ratingCount', 'productCount',
+              'totalSales', 'updatedAt'
+            ])
+            && validPublicStoreDocument(request.resource.data))
         || (ownsStore(storeId)
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'name', 'slug', 'description', 'logoUrl', 'bannerUrl',
-              'email', 'phone', 'address', 'businessName',
-              'businessDocumentUrl', 'socialLinks', 'seo', 'businessHours',
+              'socialLinks', 'seo', 'businessHours',
               'shippingPolicy', 'shippingEnabled', 'shippingFee',
               'freeShippingThreshold', 'estimatedDeliveryDays', 'updatedAt'
-            ]))
-        || (ownsStore(storeId)
+            ])
+            && validPublicStoreDocument(request.resource.data))
+        || (ownsApplicationStore(storeId)
             && resource.data.status == 'rejected'
             && request.resource.data.status == 'pending'
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-              'status', 'rejectionReason', 'businessName',
+              'name', 'description', 'logoUrl', 'status', 'updatedAt'
+            ])
+            && validPublicStoreDocument(request.resource.data)
+            && getAfter(
+                 /databases/$(database)/documents/merchantApplications/$(storeId)
+               ).data.status == 'pending');
+
+      allow delete: if isAdmin();
+    }
+
+    // Trusted, public-only store projection. Client writes are always denied;
+    // Cloud Functions and migration tooling populate this collection.
+    match /publicStores/{storeId} {
+      allow read: if resource.data.status == 'approved';
+      allow write: if false;
+    }
+
+    // ------------------------------------------- private merchant applications
+    match /merchantApplications/{applicationId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.ownerId == request.auth.uid);
+
+      allow create: if isCustomer()
+        && applicationId == request.resource.data.storeId
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && validMerchantApplication(request.resource.data)
+        && existsAfter(storePath(request.resource.data.storeId))
+        && getAfter(storePath(request.resource.data.storeId)).data.ownerId
+             == request.auth.uid
+        && getAfter(storePath(request.resource.data.storeId)).data.status
+             == 'pending';
+
+      allow update: if (isAdmin()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'rejectionReason', 'updatedAt'
+            ])
+            && validMerchantApplication(request.resource.data))
+        || (ownsStore(resource.data.storeId)
+            && request.resource.data.ownerId == resource.data.ownerId
+            && request.resource.data.storeId == resource.data.storeId
+            && request.resource.data.status == resource.data.status
+            && request.resource.data.createdAt == resource.data.createdAt
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'email', 'phone', 'address', 'businessName',
               'businessDocumentUrl', 'updatedAt'
-            ]));
+            ])
+            && validMerchantApplication(request.resource.data))
+        || (ownsApplicationStore(resource.data.storeId)
+            && resource.data.status == 'rejected'
+            && request.resource.data.status == 'pending'
+            && request.resource.data.rejectionReason == ''
+            && request.resource.data.ownerId == resource.data.ownerId
+            && request.resource.data.storeId == resource.data.storeId
+            && request.resource.data.createdAt == resource.data.createdAt
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'email', 'phone', 'address', 'businessName',
+              'businessDocumentUrl', 'status', 'rejectionReason', 'updatedAt'
+            ])
+            && validMerchantApplication(request.resource.data)
+            && getAfter(storePath(resource.data.storeId)).data.status == 'pending');
 
       allow delete: if isAdmin();
     }
 
     // ----------------------------------------------------------- products
     match /products/{productId} {
-      allow read: if resource.data.status == 'approved'
+      allow read: if (resource.data.status == 'approved'
+            && resource.data.publiclyVisible == true)
         || isAdmin()
-        || (signedIn() && resource.data.merchantId == request.auth.uid)
-        || (signedIn() && ownsStore(resource.data.storeId));
+        || (isMerchant() && ownsStore(resource.data.storeId));
 
       allow create: if isMerchant()
         && request.resource.data.merchantId == request.auth.uid
         && ownsStore(request.resource.data.storeId)
         && request.resource.data.status in ['draft', 'pending']
+        && request.resource.data.publiclyVisible == false
         && request.resource.data.rating == 0
         && request.resource.data.ratingCount == 0
         && request.resource.data.ratingSum == 0
@@ -565,26 +734,37 @@ service cloud.firestore {
             ])
             && validProductAggregateTransition(productId))
 
-        || (isAdmin() && aggregateFieldsUnchanged())
+        || (isAdmin()
+            && aggregateFieldsUnchanged()
+            && request.resource.data.publiclyVisible
+                 == resource.data.publiclyVisible)
 
         // Merchant edits own product without changing ownership.
         || (isMerchant()
             && resource.data.merchantId == request.auth.uid
             && request.resource.data.merchantId == resource.data.merchantId
             && request.resource.data.storeId == resource.data.storeId
+            && ownsStore(resource.data.storeId)
             && request.resource.data.createdAt == resource.data.createdAt
+            && request.resource.data.publiclyVisible
+                 == resource.data.publiclyVisible
             && aggregateFieldsUnchanged()
             && (request.resource.data.status != 'approved'
                 || resource.data.status == 'approved'))
 
         // Current client-side view counter.
-        || (signedIn()
+        || (isActiveUser()
+            && resource.data.status == 'approved'
+            && resource.data.publiclyVisible == true
+            && storeIsOperational(resource.data.storeId)
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['viewCount', 'updatedAt'])
             && request.resource.data.viewCount == resource.data.viewCount + 1);
 
       allow delete: if isAdmin()
-        || (isMerchant() && resource.data.merchantId == request.auth.uid);
+        || (isMerchant()
+            && resource.data.merchantId == request.auth.uid
+            && ownsStore(resource.data.storeId));
     }
 
     // ------------------------------------------------------------- orders
@@ -597,8 +777,7 @@ service cloud.firestore {
     match /orders/{orderId} {
       allow read: if isAdmin()
         || (signedIn() && resource.data.customerId == request.auth.uid)
-        || (signedIn() && resource.data.merchantId == request.auth.uid)
-        || (signedIn() && ownsStore(resource.data.storeId));
+        || (isMerchant() && ownsStore(resource.data.storeId));
 
       // Order creation is server-only. Admin SDK writes from the trusted
       // checkout function bypass rules; no browser identity may create one.
@@ -606,8 +785,9 @@ service cloud.firestore {
 
       allow update: if
         // Merchant fulfilment and cash confirmation fields only.
-        (signedIn()
+        (isMerchant()
           && resource.data.merchantId == request.auth.uid
+          && ownsStore(resource.data.storeId)
           && request.resource.data.customerId == resource.data.customerId
           && request.resource.data.merchantId == resource.data.merchantId
           && request.resource.data.storeId == resource.data.storeId
@@ -620,7 +800,7 @@ service cloud.firestore {
 
         // Customer return request only. Cancellation restores inventory and
         // therefore runs through the trusted backend transaction as well.
-        || (signedIn()
+        || (isCustomer()
           && resource.data.customerId == request.auth.uid
           && request.resource.data.customerId == resource.data.customerId
           && request.resource.data.merchantId == resource.data.merchantId
@@ -666,7 +846,7 @@ service cloud.firestore {
       allow read: if resource.data.status == 'approved'
         || isAdmin()
         || (signedIn() && resource.data.customerId == request.auth.uid)
-        || (signedIn() && ownsStore(resource.data.storeId));
+        || (isMerchant() && ownsStore(resource.data.storeId));
 
       // The storefront publishes customer reviews immediately. Identity,
       // moderation, reply, verification, counters, and timestamps cannot be
@@ -685,7 +865,7 @@ service cloud.firestore {
       match /helpfulVotes/{uid} {
         allow read: if isSelf(uid);
 
-        allow create: if isSelf(uid)
+        allow create: if isActiveUser() && isSelf(uid)
           && request.resource.data.keys().hasAll([
             'reviewId', 'userId', 'createdAt'
           ])
@@ -773,7 +953,7 @@ service cloud.firestore {
 
       // Current order/support services create cross-user notifications client-side.
       // Validate the payload while keeping that workflow functional.
-      allow create: if signedIn()
+      allow create: if isActiveUser()
         && request.resource.data.userId is string
         && request.resource.data.type is string
         && request.resource.data.title is string
@@ -782,13 +962,13 @@ service cloud.firestore {
         && validNotificationType(request.resource.data.type);
 
       // Recipient can only change read state.
-      allow update: if signedIn()
+      allow update: if isActiveUser()
         && resource.data.userId == request.auth.uid
         && request.resource.data.userId == resource.data.userId
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['read', 'updatedAt']);
 
-      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if isActiveUser() && resource.data.userId == request.auth.uid;
     }
 
     // ------------------------------------------------------------------ cms
@@ -818,7 +998,7 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (signedIn() && resource.data.customerId == request.auth.uid);
 
-      allow create: if signedIn()
+      allow create: if isActiveUser()
         && request.resource.data.customerId == request.auth.uid
         && request.resource.data.status == 'open'
         && validSupportPriority(request.resource.data.priority)
@@ -838,7 +1018,7 @@ service cloud.firestore {
           && validSupportPriority(request.resource.data.priority))
 
         // Customer can append exactly one message and cannot change metadata.
-        || (signedIn()
+        || (isActiveUser()
           && resource.data.customerId == request.auth.uid
           && request.resource.data.customerId == resource.data.customerId
           && request.resource.data.status == resource.data.status
@@ -859,7 +1039,7 @@ service cloud.firestore {
     // ------------------------------------------------------------- logging
     match /activityLogs/{id} {
       allow read: if isAdmin();
-      allow create: if signedIn()
+      allow create: if isActiveUser()
         && currentUserExists()
         && request.resource.data.actorId == request.auth.uid
         && request.resource.data.actorRole == userDoc().role
@@ -870,7 +1050,7 @@ service cloud.firestore {
     match /inventoryLogs/{id} {
       allow read: if isAdmin()
         || (signedIn() && ownsStore(resource.data.storeId));
-      allow create: if signedIn()
+      allow create: if isActiveUser()
         && (isAdmin() || ownsStore(request.resource.data.storeId))
         && request.resource.data.by == request.auth.uid;
       allow update, delete: if false;

@@ -62,7 +62,10 @@ export const productsService = {
    * keep the composite-index surface small.
    */
   async listPublic(filters: ProductFilters = {}, cursor?: unknown, pageSize = PAGE_SIZE): Promise<PaginatedResult<Product>> {
-    const constraints: QueryConstraint[] = [where('status', '==', 'approved')]
+    const constraints: QueryConstraint[] = [
+      where('status', '==', 'approved'),
+      where('publiclyVisible', '==', true),
+    ]
     if (filters.categoryId) constraints.push(where('categoryId', '==', filters.categoryId))
     if (filters.subcategoryId) constraints.push(where('subcategoryId', '==', filters.subcategoryId))
     if (filters.brandId) constraints.push(where('brandId', '==', filters.brandId))
@@ -96,6 +99,7 @@ async getBySlug(slug: string) {
     COLLECTIONS.products,
     where("slug", "==", slug),
     where("status", "==", "approved"),
+    where("publiclyVisible", "==", true),
     limit(1)
   )
 
@@ -108,7 +112,14 @@ async getBySlug(slug: string) {
     const chunks: string[][] = []
     for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30))
     const results = await Promise.all(
-      chunks.map((chunk) => queryDocs<Product>(COLLECTIONS.products, where('__name__', 'in', chunk))),
+      chunks.map((chunk) =>
+        queryDocs<Product>(
+          COLLECTIONS.products,
+          where('__name__', 'in', chunk),
+          where('status', '==', 'approved'),
+          where('publiclyVisible', '==', true),
+        ),
+      ),
     )
     return results.flat()
   },
@@ -118,6 +129,7 @@ async getBySlug(slug: string) {
     return queryDocs<Product>(
       COLLECTIONS.products,
       where('status', '==', 'approved'),
+      where('publiclyVisible', '==', true),
       where(field, '==', true),
       limit(count),
     )
@@ -127,6 +139,7 @@ async getBySlug(slug: string) {
     return queryDocs<Product>(
       COLLECTIONS.products,
       where('status', '==', 'approved'),
+      where('publiclyVisible', '==', true),
       orderBy('soldCount', 'desc'),
       limit(count),
     )
@@ -136,6 +149,7 @@ async getBySlug(slug: string) {
     return queryDocs<Product>(
       COLLECTIONS.products,
       where('status', '==', 'approved'),
+      where('publiclyVisible', '==', true),
       orderBy('createdAt', 'desc'),
       limit(count),
     )
@@ -145,6 +159,7 @@ async getBySlug(slug: string) {
     const items = await queryDocs<Product>(
       COLLECTIONS.products,
       where('status', '==', 'approved'),
+      where('publiclyVisible', '==', true),
       where('flashSale.active', '==', true),
       limit(count),
     )
@@ -153,7 +168,12 @@ async getBySlug(slug: string) {
 
   /** All approved products for client-side fuzzy search (Fuse.js) */
   async listForSearch(max = 400) {
-    return queryDocs<Product>(COLLECTIONS.products, where('status', '==', 'approved'), limit(max))
+    return queryDocs<Product>(
+      COLLECTIONS.products,
+      where('status', '==', 'approved'),
+      where('publiclyVisible', '==', true),
+      limit(max),
+    )
   },
 
   // ----------------------------------------------------- merchant CRUD
@@ -164,7 +184,7 @@ async getBySlug(slug: string) {
     return queryDocs<Product>(COLLECTIONS.products, ...constraints)
   },
 
-  async create(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'rating' | 'ratingCount' | 'ratingSum' | 'ratingReviewId' | 'ratingReviewVersion' | 'soldCount' | 'viewCount' | 'slug'>) {
+  async create(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'rating' | 'ratingCount' | 'ratingSum' | 'ratingReviewId' | 'ratingReviewVersion' | 'soldCount' | 'viewCount' | 'slug' | 'publiclyVisible'>) {
     const slug = `${slugify(data.name)}-${Math.random().toString(36).slice(2, 7)}`
     return createDocument<Product>(COLLECTIONS.products, {
       ...data,
@@ -174,6 +194,7 @@ async getBySlug(slug: string) {
       ratingSum: 0,
       soldCount: 0,
       viewCount: 0,
+      publiclyVisible: false,
     } as Omit<Product, 'id' | 'createdAt' | 'updatedAt'>)
   },
 

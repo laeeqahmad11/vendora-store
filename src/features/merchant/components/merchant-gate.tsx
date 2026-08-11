@@ -37,7 +37,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { storesService } from '@/services/stores.service'
 import { storageService } from '@/services/storage.service'
 import { getErrorMessage } from '@/lib/utils'
-import type { Store } from '@/types'
+import type { MerchantApplication, Store } from '@/types'
 
 const NAV: DashboardNavItem[] = [
   { to: '/merchant', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -65,10 +65,16 @@ const applySchema = z.object({
 
 type ApplyValues = z.infer<typeof applySchema>
 
-function ApplicationForm({ existing }: { existing?: Store | null }) {
+function ApplicationForm({
+  existingStore,
+  existingApplication,
+}: {
+  existingStore?: Store | null
+  existingApplication?: MerchantApplication | null
+}) {
   const { profile, role, refreshStore } = useAuthStore()
-  const [logo, setLogo] = React.useState<string[]>(existing?.logoUrl ? [existing.logoUrl] : [])
-  const [docUrl, setDocUrl] = React.useState<string | undefined>(existing?.businessDocumentUrl)
+  const [logo, setLogo] = React.useState<string[]>(existingStore?.logoUrl ? [existingStore.logoUrl] : [])
+  const [docUrl, setDocUrl] = React.useState<string | undefined>(existingApplication?.businessDocumentUrl)
   const [docUploading, setDocUploading] = React.useState(false)
 
   const {
@@ -78,12 +84,12 @@ function ApplicationForm({ existing }: { existing?: Store | null }) {
   } = useForm<ApplyValues>({
     resolver: zodResolver(applySchema),
     defaultValues: {
-      name: existing?.name ?? '',
-      description: existing?.description ?? '',
-      businessName: existing?.businessName ?? '',
-      email: existing?.email ?? profile?.email ?? '',
-      phone: existing?.phone ?? profile?.phone ?? '',
-      address: existing?.address ?? '',
+      name: existingStore?.name ?? '',
+      description: existingStore?.description ?? '',
+      businessName: existingApplication?.businessName ?? '',
+      email: existingApplication?.email ?? profile?.email ?? '',
+      phone: existingApplication?.phone ?? profile?.phone ?? '',
+      address: existingApplication?.address ?? '',
     },
   })
 
@@ -95,8 +101,8 @@ function ApplicationForm({ existing }: { existing?: Store | null }) {
         logoUrl: logo[0],
         businessDocumentUrl: docUrl,
       }
-      if (existing) {
-        await storesService.update(existing.id, { ...payload, status: 'pending', rejectionReason: '' })
+      if (existingStore) {
+        await storesService.resubmit(existingStore, payload)
         toast.success('Application re-submitted for review.')
       } else {
         await storesService.apply(payload, {
@@ -117,7 +123,7 @@ function ApplicationForm({ existing }: { existing?: Store | null }) {
     if (!file) return
     setDocUploading(true)
     try {
-      const url = await storageService.uploadFile(file, 'stores/documents')
+      const url = await storageService.uploadFile(file, `applications/${profile?.id ?? 'unknown'}`)
       setDocUrl(url)
       toast.success('Document uploaded')
     } catch (err) {
@@ -130,7 +136,7 @@ function ApplicationForm({ existing }: { existing?: Store | null }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{existing ? 'Update your application' : 'Store application'}</CardTitle>
+        <CardTitle>{existingStore ? 'Update your application' : 'Store application'}</CardTitle>
         <CardDescription>
           Tell us about your business. Our team reviews every application before your store goes live.
         </CardDescription>
@@ -187,7 +193,7 @@ function ApplicationForm({ existing }: { existing?: Store | null }) {
             </div>
           </FormField>
           <Button type="submit" loading={isSubmitting} className="w-full sm:w-auto">
-            {existing ? 'Re-submit application' : 'Submit application'}
+            {existingStore ? 'Re-submit application' : 'Submit application'}
           </Button>
         </form>
       </CardContent>
@@ -285,7 +291,7 @@ function PendingScreen({ store }: { store: Store }) {
   )
 }
 
-function RejectedScreen({ store }: { store: Store }) {
+function RejectedScreen({ store, application }: { store: Store; application: MerchantApplication | null }) {
   return (
     <FullPage>
       <SEO title="Application rejected" />
@@ -296,14 +302,14 @@ function RejectedScreen({ store }: { store: Store }) {
             <div>
               <h1 className="font-semibold">Your application was rejected</h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                {store.rejectionReason
-                  ? `Reason: ${store.rejectionReason}`
+                {application?.rejectionReason
+                  ? `Reason: ${application.rejectionReason}`
                   : 'No specific reason was provided. Please review your details and re-apply.'}
               </p>
             </div>
           </div>
         </div>
-        <ApplicationForm existing={store} />
+        <ApplicationForm existingStore={store} existingApplication={application} />
       </div>
     </FullPage>
   )
@@ -333,7 +339,7 @@ function SuspendedScreen({ store }: { store: Store }) {
 // ------------------------------------------------------------------- gate
 
 export function MerchantGate() {
-  const { role, store, loading, initialized } = useAuthStore()
+  const { role, store, application, loading, initialized } = useAuthStore()
 
   if (!initialized || loading) {
     return (
@@ -361,7 +367,7 @@ export function MerchantGate() {
 
   if (!store) return <ApplyPage />
   if (store.status === 'pending') return <PendingScreen store={store} />
-  if (store.status === 'rejected') return <RejectedScreen store={store} />
+  if (store.status === 'rejected') return <RejectedScreen store={store} application={application} />
   if (store.status === 'suspended') return <SuspendedScreen store={store} />
 
   return <DashboardLayout title="Merchant" nav={NAV} />
