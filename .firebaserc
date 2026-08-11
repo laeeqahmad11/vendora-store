@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "vendora-store-30319"
+    "default": "demo-vendora-e2e",
+    "demo": "demo-vendora-e2e",
+    "production": "vendora-store-30319"
   }
 }

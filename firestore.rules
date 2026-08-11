@@ -588,6 +588,12 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------- orders
+    match /checkoutRequests/{requestId} {
+      // Idempotency records contain backend coordination state and are never
+      // readable or writable by browser clients.
+      allow read, write: if false;
+    }
+
     match /orders/{orderId} {
       allow read: if isAdmin()
         || (signedIn() && resource.data.customerId == request.auth.uid)

@@ -1,4 +1,5 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app'
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check'
 import { getAuth, connectAuthEmulator, GoogleAuthProvider } from 'firebase/auth'
 import {
   initializeFirestore,
@@ -21,19 +22,29 @@ const firebaseConfig = {
 /** True when a real Firebase project is configured via .env.local */
 export const isFirebaseConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId)
 
-const app: FirebaseApp = getApps()[0] ?? initializeApp(
-  isFirebaseConfigured
-    ? firebaseConfig
-    : // Placeholder config lets the UI render (with a setup banner) before Firebase is connected
-      { apiKey: 'demo', authDomain: 'demo.firebaseapp.com', projectId: 'demo', appId: 'demo' },
-)
+const app: FirebaseApp =
+  getApps()[0] ??
+  initializeApp(
+    isFirebaseConfigured
+      ? firebaseConfig
+      : // Placeholder config lets the UI render (with a setup banner) before Firebase is connected
+        { apiKey: 'demo', authDomain: 'demo.firebaseapp.com', projectId: 'demo', appId: 'demo' },
+  )
+
+const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY
+if (isFirebaseConfigured && appCheckSiteKey && import.meta.env.VITE_USE_EMULATORS !== 'true') {
+  initializeAppCheck(app, {
+    provider: new ReCaptchaEnterpriseProvider(appCheckSiteKey),
+    isTokenAutoRefreshEnabled: true,
+  })
+}
 
 export const auth = getAuth(app)
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
 })
 export const storage = getStorage(app)
-export const functions = getFunctions(app, 'us-central1')
+export const functions = getFunctions(app, import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1')
 export const googleProvider = new GoogleAuthProvider()
 
 if (import.meta.env.VITE_USE_EMULATORS === 'true') {

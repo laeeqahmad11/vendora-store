@@ -29,6 +29,9 @@ tests/.auth/
 # local env
 .env.local
 .env.*.local
+functions/.env
+functions/.env.*
+!functions/.env.example
 
 # firebase
 *serviceAccount*.json

@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto'
 
 import { getApps, initializeApp } from 'firebase-admin/app'
-import { FieldValue, getFirestore } from 'firebase-admin/firestore'
+import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore'
+import { logger } from 'firebase-functions'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
 
 if (!getApps().length) initializeApp()
@@ -9,8 +10,11 @@ if (!getApps().length) initializeApp()
 const db = getFirestore()
 db.settings({ ignoreUndefinedProperties: true })
 
-const REGION = 'us-central1'
+const REGION = process.env.VENDORA_FUNCTION_REGION || 'us-central1'
 const MAX_ITEMS = 50
+const MAX_ITEM_QUANTITY = 1_000
+const MAX_CHECKOUT_PAYLOAD_BYTES = 64 * 1024
+const IDEMPOTENCY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000
 const ORDER_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 const productUnavailableMessage =
@@ -32,6 +36,78 @@ function cleanString(value, field, minimum, maximum, { optional = false } = {}) 
     fail('invalid-argument', `${field} is invalid.`)
   }
   return clean
+}
+
+function cleanIdentifier(value, field, minimum = 1, maximum = 128) {
+  const clean = cleanString(value, field, minimum, maximum)
+  if (clean.includes('/') || containsControlCharacter(clean)) {
+    fail('invalid-argument', `${field} is invalid.`)
+  }
+  return clean
+}
+
+function containsControlCharacter(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code <= 31 || code === 127) return true
+  }
+  return false
+}
+
+function cleanSingleLineString(value, field, minimum, maximum, options) {
+  const clean = cleanString(value, field, minimum, maximum, options)
+  if (clean !== undefined && containsControlCharacter(clean)) {
+    fail('invalid-argument', `${field} is invalid.`)
+  }
+  return clean
+}
+
+function cleanEmail(value) {
+  const clean = cleanSingleLineString(value, 'Email', 3, 320)
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(clean)) {
+    fail('invalid-argument', 'Email is invalid.')
+  }
+  return clean
+}
+
+function cleanPhone(value, field) {
+  const clean = cleanSingleLineString(value, field, 6, 40)
+  if (!/^[+0-9().\-\s]+$/u.test(clean)) fail('invalid-argument', `${field} is invalid.`)
+  return clean
+}
+
+function assertPayloadSize(
+  value,
+  maximum = MAX_CHECKOUT_PAYLOAD_BYTES,
+  message = 'Checkout request is too large.',
+) {
+  let serialized
+  try {
+    serialized = JSON.stringify(value)
+  } catch {
+    fail('invalid-argument', 'Checkout request is invalid.')
+  }
+  if (!serialized || Buffer.byteLength(serialized, 'utf8') > maximum) {
+    fail('invalid-argument', message)
+  }
+}
+
+function safeRequestId(value) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function errorCategory(error) {
+  if (error instanceof HttpsError) return error.code
+  if (error?.code === 10 || error?.code === 'aborted') return 'aborted'
+  return 'internal'
+}
+
+function safeCallableError(error, internalMessage, conflictMessage) {
+  if (error instanceof HttpsError) return error
+  if (error?.code === 10 || error?.code === 'aborted') {
+    return new HttpsError('aborted', conflictMessage)
+  }
+  return new HttpsError('internal', internalMessage)
 }
 
 function money(value) {
@@ -59,6 +135,7 @@ function orderNumber() {
 }
 
 function parseCheckoutIntent(raw) {
+  assertPayloadSize(raw)
   if (!isObject(raw)) fail('invalid-argument', 'Checkout request is invalid.')
   if (!Array.isArray(raw.items) || raw.items.length < 1 || raw.items.length > MAX_ITEMS) {
     fail('invalid-argument', 'Your cart must contain between 1 and 50 items.')
@@ -66,10 +143,13 @@ function parseCheckoutIntent(raw) {
 
   const items = raw.items.map((item) => {
     if (!isObject(item)) fail('invalid-argument', 'A cart item is invalid.')
-    const productId = cleanString(item.productId, 'Product', 1, 128)
-    const variantId = cleanString(item.variantId, 'Variant', 1, 128, { optional: true })
-    if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
-      fail('invalid-argument', 'Each item quantity must be a positive integer.')
+    const productId = cleanIdentifier(item.productId, 'Product')
+    const variantId =
+      item.variantId === undefined || item.variantId === null || item.variantId === ''
+        ? undefined
+        : cleanIdentifier(item.variantId, 'Variant')
+    if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0 || item.quantity > MAX_ITEM_QUANTITY) {
+      fail('invalid-argument', `Each item quantity must be an integer between 1 and ${MAX_ITEM_QUANTITY}.`)
     }
     return { productId, variantId, quantity: item.quantity }
   })
@@ -80,18 +160,20 @@ function parseCheckoutIntent(raw) {
 
   const address = raw.delivery.address
   const delivery = {
-    fullName: cleanString(raw.delivery.fullName, 'Full name', 2, 100),
-    email: cleanString(raw.delivery.email, 'Email', 3, 320),
-    phone: cleanString(raw.delivery.phone, 'Phone', 6, 40),
+    fullName: cleanSingleLineString(raw.delivery.fullName, 'Full name', 2, 100),
+    email: cleanEmail(raw.delivery.email),
+    phone: cleanPhone(raw.delivery.phone, 'Phone'),
     address: {
-      fullName: cleanString(address.fullName, 'Address name', 2, 100),
-      phone: cleanString(address.phone, 'Address phone', 6, 40),
-      line1: cleanString(address.line1, 'Address line 1', 3, 200),
-      line2: cleanString(address.line2, 'Address line 2', 1, 200, { optional: true }),
-      city: cleanString(address.city, 'City', 2, 100),
-      province: cleanString(address.province, 'Province', 2, 100),
-      postalCode: cleanString(address.postalCode, 'Postal code', 2, 32),
-      country: cleanString(address.country, 'Country', 2, 100),
+      fullName: cleanSingleLineString(address.fullName, 'Address name', 2, 100),
+      phone: cleanPhone(address.phone, 'Address phone'),
+      line1: cleanSingleLineString(address.line1, 'Address line 1', 3, 200),
+      line2: cleanSingleLineString(address.line2, 'Address line 2', 1, 200, {
+        optional: true,
+      }),
+      city: cleanSingleLineString(address.city, 'City', 2, 100),
+      province: cleanSingleLineString(address.province, 'Province', 2, 100),
+      postalCode: cleanSingleLineString(address.postalCode, 'Postal code', 2, 32),
+      country: cleanSingleLineString(address.country, 'Country', 2, 100),
     },
   }
 
@@ -104,15 +186,11 @@ function parseCheckoutIntent(raw) {
     delivery,
     paymentMethod: 'cod',
     couponCode: cleanString(raw.couponCode, 'Promo code', 3, 50, { optional: true })?.toUpperCase(),
-    specialInstructions: cleanString(
-      raw.specialInstructions,
-      'Special instructions',
-      1,
-      2000,
-      { optional: true },
-    ),
+    specialInstructions: cleanString(raw.specialInstructions, 'Special instructions', 1, 2000, {
+      optional: true,
+    }),
     giftNote: cleanString(raw.giftNote, 'Gift note', 1, 1000, { optional: true }),
-    idempotencyKey: cleanString(raw.idempotencyKey, 'Checkout request ID', 8, 128),
+    idempotencyKey: cleanIdentifier(raw.idempotencyKey, 'Checkout request ID', 8, 128),
   }
 }
 
@@ -121,9 +199,7 @@ function hashIntent(intent) {
 }
 
 function currentPrice(product, variantId, now) {
-  const variant = variantId
-    ? product.variants?.find((candidate) => candidate?.id === variantId)
-    : undefined
+  const variant = variantId ? product.variants?.find((candidate) => candidate?.id === variantId) : undefined
 
   if (variantId && !variant) fail('failed-precondition', productUnavailableMessage)
   if (variant?.price != null) {
@@ -146,12 +222,7 @@ function couponEligibleItems(coupon, items) {
 }
 
 function couponEligibleSubtotal(coupon, items) {
-  return money(
-    couponEligibleItems(coupon, items).reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0,
-    ),
-  )
+  return money(couponEligibleItems(coupon, items).reduce((sum, item) => sum + item.price * item.quantity, 0))
 }
 
 function calculateCoupon(coupon, items, { now, storeId, customerUsageCount }) {
@@ -176,10 +247,7 @@ function calculateCoupon(coupon, items, { now, storeId, customerUsageCount }) {
     fail('resource-exhausted', 'This promo code has reached its usage limit.')
   }
   if (coupon.perCustomerLimit && customerUsageCount >= coupon.perCustomerLimit) {
-    fail(
-      'resource-exhausted',
-      'You have already reached the usage limit for this promo code.',
-    )
+    fail('resource-exhausted', 'You have already reached the usage limit for this promo code.')
   }
 
   const eligible = couponEligibleItems(coupon, items)
@@ -220,14 +288,10 @@ function allocateCoupon(coupon, totalDiscount, groups) {
     .map((group) => ({
       group,
       eligibleSubtotal:
-        coupon.storeId && coupon.storeId !== group.storeId
-          ? 0
-          : couponEligibleSubtotal(coupon, group.items),
+        coupon.storeId && coupon.storeId !== group.storeId ? 0 : couponEligibleSubtotal(coupon, group.items),
     }))
     .filter(({ eligibleSubtotal }) => eligibleSubtotal > 0)
-  const totalEligible = money(
-    eligible.reduce((sum, entry) => sum + entry.eligibleSubtotal, 0),
-  )
+  const totalEligible = money(eligible.reduce((sum, entry) => sum + entry.eligibleSubtotal, 0))
   const result = new Map(groups.map((group) => [group.storeId, 0]))
   let allocated = 0
 
@@ -248,392 +312,444 @@ function checkoutOptions() {
     region: REGION,
     timeoutSeconds: 60,
     memory: '256MiB',
+    concurrency: 40,
+    minInstances: 0,
     maxInstances: 20,
+    enforceAppCheck:
+      process.env.FUNCTIONS_EMULATOR !== 'true' && process.env.CHECKOUT_ENFORCE_APP_CHECK === 'true',
   }
 }
 
 export const placeOrders = onCall(checkoutOptions(), async (request) => {
-  if (!request.auth?.uid) fail('unauthenticated', 'You must be signed in to place an order.')
+  const startedAt = Date.now()
+  const customerId = request.auth?.uid
+  let requestId
 
-  const customerId = request.auth.uid
-  const intent = parseCheckoutIntent(request.data)
-  const requestHash = hashIntent(intent)
-  const requestRef = db.doc(`checkoutRequests/${customerId}_${intent.idempotencyKey}`)
+  try {
+    if (!customerId) fail('unauthenticated', 'You must be signed in to place an order.')
 
-  return db.runTransaction(async (transaction) => {
-    const existingRequest = await transaction.get(requestRef)
-    if (existingRequest.exists) {
-      if (existingRequest.get('requestHash') !== requestHash) {
-        fail('already-exists', 'This checkout request ID has already been used.')
-      }
-      return existingRequest.get('result')
-    }
+    const intent = parseCheckoutIntent(request.data)
+    requestId = safeRequestId(intent.idempotencyKey)
+    const requestHash = hashIntent(intent)
+    const requestRef = db.doc(`checkoutRequests/${customerId}_${requestId}`)
 
-    const userRef = db.doc(`users/${customerId}`)
-    const userSnapshot = await transaction.get(userRef)
-    if (
-      !userSnapshot.exists ||
-      userSnapshot.get('role') !== 'customer' ||
-      userSnapshot.get('suspended') === true
-    ) {
-      fail('permission-denied', 'This account cannot place orders.')
-    }
-
-    const productIds = [...new Set(intent.items.map((item) => item.productId))]
-    const productRefs = productIds.map((id) => db.doc(`products/${id}`))
-    const productSnapshots = await transaction.getAll(...productRefs)
-    const products = new Map()
-    productSnapshots.forEach((snapshot) => {
-      if (!snapshot.exists) fail('failed-precondition', productUnavailableMessage)
-      products.set(snapshot.id, { id: snapshot.id, ...snapshot.data() })
-    })
-
-    const now = Date.now()
-    const requestedByProduct = new Map()
-    const authoritativeItems = intent.items.map((item) => {
-      const product = products.get(item.productId)
-      if (!product || product.status !== 'approved') {
-        fail('failed-precondition', productUnavailableMessage)
-      }
-      requestedByProduct.set(
-        item.productId,
-        (requestedByProduct.get(item.productId) ?? 0) + item.quantity,
-      )
-      const { price, variant } = currentPrice(product, item.variantId, now)
-      return {
-        productId: item.productId,
-        storeId: product.storeId,
-        merchantId: product.merchantId,
-        name: cleanString(product.name, 'Product name', 1, 500),
-        imageUrl: variant?.imageUrl ?? product.images?.[0],
-        price,
-        quantity: item.quantity,
-        variantId: item.variantId,
-        variant: variant?.options,
-        sku: variant?.sku ?? product.sku,
-      }
-    })
-
-    for (const [productId, requestedQuantity] of requestedByProduct) {
-      const product = products.get(productId)
-      const minimum = Number.isSafeInteger(product.minOrderQty) ? product.minOrderQty : 1
-      const maximum = Number.isSafeInteger(product.maxOrderQty)
-        ? product.maxOrderQty
-        : Number.MAX_SAFE_INTEGER
+    const result = await db.runTransaction(async (transaction) => {
+      const userRef = db.doc(`users/${customerId}`)
+      const userSnapshot = await transaction.get(userRef)
       if (
-        requestedQuantity < minimum ||
-        requestedQuantity > maximum ||
-        !Number.isSafeInteger(product.stock) ||
-        product.stock < requestedQuantity ||
-        !Number.isSafeInteger(product.soldCount) ||
-        product.soldCount < 0
+        !userSnapshot.exists ||
+        userSnapshot.get('role') !== 'customer' ||
+        userSnapshot.get('suspended') === true
       ) {
-        fail('failed-precondition', productUnavailableMessage)
+        fail('permission-denied', 'This account cannot place orders.')
       }
-    }
 
-    const storeIds = [...new Set(authoritativeItems.map((item) => item.storeId))]
-    if (storeIds.some((id) => typeof id !== 'string' || !id)) {
-      fail('failed-precondition', 'One or more stores are unavailable.')
-    }
-    const storeRefs = storeIds.map((id) => db.doc(`stores/${id}`))
-    const storeSnapshots = await transaction.getAll(...storeRefs)
-    const stores = new Map()
-    storeSnapshots.forEach((snapshot) => {
-      if (!snapshot.exists) fail('failed-precondition', 'One or more stores are unavailable.')
-      stores.set(snapshot.id, { id: snapshot.id, ...snapshot.data() })
-    })
+      const existingRequest = await transaction.get(requestRef)
+      if (existingRequest.exists) {
+        if (existingRequest.get('requestHash') !== requestHash) {
+          fail('already-exists', 'This checkout request ID has already been used.')
+        }
+        return existingRequest.get('result')
+      }
 
-    const groups = storeIds.map((storeId) => {
-      const store = stores.get(storeId)
-      const items = authoritativeItems.filter((item) => item.storeId === storeId)
-      if (
-        store.status !== 'approved' ||
-        !store.ownerId ||
-        items.some((item) => item.merchantId !== store.ownerId)
-      ) {
+      const productIds = [...new Set(intent.items.map((item) => item.productId))]
+      const productRefs = productIds.map((id) => db.doc(`products/${id}`))
+      const productSnapshots = await transaction.getAll(...productRefs)
+      const products = new Map()
+      productSnapshots.forEach((snapshot) => {
+        if (!snapshot.exists) fail('failed-precondition', productUnavailableMessage)
+        products.set(snapshot.id, { id: snapshot.id, ...snapshot.data() })
+      })
+
+      const now = Date.now()
+      const requestedByProduct = new Map()
+      const authoritativeItems = intent.items.map((item) => {
+        const product = products.get(item.productId)
+        if (!product || product.status !== 'approved') {
+          fail('failed-precondition', productUnavailableMessage)
+        }
+        requestedByProduct.set(item.productId, (requestedByProduct.get(item.productId) ?? 0) + item.quantity)
+        const { price, variant } = currentPrice(product, item.variantId, now)
+        return {
+          productId: item.productId,
+          storeId: product.storeId,
+          merchantId: product.merchantId,
+          name: cleanString(product.name, 'Product name', 1, 500),
+          imageUrl: variant?.imageUrl ?? product.images?.[0],
+          price,
+          quantity: item.quantity,
+          variantId: item.variantId,
+          variant: variant?.options,
+          sku: variant?.sku ?? product.sku,
+        }
+      })
+
+      for (const [productId, requestedQuantity] of requestedByProduct) {
+        const product = products.get(productId)
+        const minimum = Number.isSafeInteger(product.minOrderQty) ? product.minOrderQty : 1
+        const maximum = Number.isSafeInteger(product.maxOrderQty)
+          ? product.maxOrderQty
+          : Number.MAX_SAFE_INTEGER
+        if (
+          requestedQuantity < minimum ||
+          requestedQuantity > maximum ||
+          !Number.isSafeInteger(product.stock) ||
+          product.stock < requestedQuantity ||
+          !Number.isSafeInteger(product.soldCount) ||
+          product.soldCount < 0
+        ) {
+          fail('failed-precondition', productUnavailableMessage)
+        }
+      }
+
+      const storeIds = [...new Set(authoritativeItems.map((item) => item.storeId))]
+      if (storeIds.some((id) => typeof id !== 'string' || !id)) {
         fail('failed-precondition', 'One or more stores are unavailable.')
       }
-      const subtotal = money(items.reduce((sum, item) => sum + item.price * item.quantity, 0))
-      const shippingFeeValue = finiteMoney(
-        store.shippingFee ?? 0,
-        'Store shipping details are unavailable.',
-      )
-      const threshold = finiteMoney(
-        store.freeShippingThreshold ?? 0,
-        'Store shipping details are unavailable.',
-      )
-      const shippingFee =
-        store.shippingEnabled === false || (threshold > 0 && subtotal >= threshold)
-          ? 0
-          : shippingFeeValue
-      return { storeId, store, items, subtotal, shippingFee }
-    })
+      const storeRefs = storeIds.map((id) => db.doc(`stores/${id}`))
+      const storeSnapshots = await transaction.getAll(...storeRefs)
+      const stores = new Map()
+      storeSnapshots.forEach((snapshot) => {
+        if (!snapshot.exists) fail('failed-precondition', 'One or more stores are unavailable.')
+        stores.set(snapshot.id, { id: snapshot.id, ...snapshot.data() })
+      })
 
-    let coupon = null
-    let couponRef = null
-    let usageRef = null
-    let customerUsageRef = null
-    let customerUsageSnapshot = null
-    let totalDiscount = 0
-    let couponBasis = 0
-    let allocations = new Map(groups.map((group) => [group.storeId, 0]))
+      const groups = storeIds.map((storeId) => {
+        const store = stores.get(storeId)
+        const items = authoritativeItems.filter((item) => item.storeId === storeId)
+        if (
+          store.status !== 'approved' ||
+          !store.ownerId ||
+          items.some((item) => item.merchantId !== store.ownerId)
+        ) {
+          fail('failed-precondition', 'One or more stores are unavailable.')
+        }
+        const subtotal = money(items.reduce((sum, item) => sum + item.price * item.quantity, 0))
+        const shippingFeeValue = finiteMoney(
+          store.shippingFee ?? 0,
+          'Store shipping details are unavailable.',
+        )
+        const threshold = finiteMoney(
+          store.freeShippingThreshold ?? 0,
+          'Store shipping details are unavailable.',
+        )
+        const shippingFee =
+          store.shippingEnabled === false || (threshold > 0 && subtotal >= threshold) ? 0 : shippingFeeValue
+        return { storeId, store, items, subtotal, shippingFee }
+      })
 
-    if (intent.couponCode) {
-      const couponQuery = db
-        .collection('coupons')
-        .where('code', '==', intent.couponCode)
-        .limit(5)
-      const couponSnapshots = await transaction.get(couponQuery)
-      const matches = couponSnapshots.docs.map((snapshot) => ({
-        id: snapshot.id,
-        ...snapshot.data(),
-      }))
-      coupon =
-        matches.find((candidate) => !candidate.storeId) ??
-        storeIds.map((storeId) => matches.find((candidate) => candidate.storeId === storeId)).find(Boolean)
-      if (!coupon) fail('failed-precondition', 'This promo code is not valid.')
+      let coupon = null
+      let couponRef = null
+      let usageRef = null
+      let customerUsageRef = null
+      let customerUsageSnapshot = null
+      let totalDiscount = 0
+      let couponBasis = 0
+      let allocations = new Map(groups.map((group) => [group.storeId, 0]))
 
-      couponRef = db.doc(`coupons/${coupon.id}`)
-      customerUsageRef = db.doc(`customerCouponUsages/${coupon.id}_${customerId}`)
-      customerUsageSnapshot = await transaction.get(customerUsageRef)
-      const customerUsageCount = customerUsageSnapshot.exists
-        ? Number(customerUsageSnapshot.get('count'))
-        : 0
-      if (!Number.isSafeInteger(customerUsageCount) || customerUsageCount < 0) {
-        fail('failed-precondition', 'This promo code is not valid.')
+      if (intent.couponCode) {
+        const couponQuery = db.collection('coupons').where('code', '==', intent.couponCode).limit(5)
+        const couponSnapshots = await transaction.get(couponQuery)
+        const matches = couponSnapshots.docs.map((snapshot) => ({
+          id: snapshot.id,
+          ...snapshot.data(),
+        }))
+        coupon =
+          matches.find((candidate) => !candidate.storeId) ??
+          storeIds.map((storeId) => matches.find((candidate) => candidate.storeId === storeId)).find(Boolean)
+        if (!coupon) fail('failed-precondition', 'This promo code is not valid.')
+
+        couponRef = db.doc(`coupons/${coupon.id}`)
+        customerUsageRef = db.doc(`customerCouponUsages/${coupon.id}_${customerId}`)
+        customerUsageSnapshot = await transaction.get(customerUsageRef)
+        const customerUsageCount = customerUsageSnapshot.exists
+          ? Number(customerUsageSnapshot.get('count'))
+          : 0
+        if (!Number.isSafeInteger(customerUsageCount) || customerUsageCount < 0) {
+          fail('failed-precondition', 'This promo code is not valid.')
+        }
+
+        const couponItems = coupon.storeId
+          ? (groups.find((group) => group.storeId === coupon.storeId)?.items ?? [])
+          : groups.flatMap((group) => group.items)
+        totalDiscount = calculateCoupon(coupon, couponItems, {
+          now,
+          storeId: coupon.storeId,
+          customerUsageCount,
+        })
+        couponBasis = couponEligibleSubtotal(coupon, couponItems)
+        allocations = allocateCoupon(coupon, totalDiscount, groups)
+        usageRef = db.collection('couponUsages').doc()
       }
 
-      const couponItems = coupon.storeId
-        ? groups.find((group) => group.storeId === coupon.storeId)?.items ?? []
-        : groups.flatMap((group) => group.items)
-      totalDiscount = calculateCoupon(coupon, couponItems, {
-        now,
-        storeId: coupon.storeId,
-        customerUsageCount,
+      const preparedOrders = groups.map((group) => {
+        const ref = db.collection('orders').doc()
+        const number = orderNumber()
+        const discount = allocations.get(group.storeId) ?? 0
+        const total = money(group.subtotal - discount + group.shippingFee)
+        const items = group.items.map(({ storeId: _storeId, merchantId: _merchantId, ...item }) =>
+          Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined)),
+        )
+        return { group, ref, number, discount, total, items }
       })
-      couponBasis = couponEligibleSubtotal(coupon, couponItems)
-      allocations = allocateCoupon(coupon, totalDiscount, groups)
-      usageRef = db.collection('couponUsages').doc()
-    }
+      const result = {
+        orderIds: preparedOrders.map(({ ref }) => ref.id),
+        orderNumbers: preparedOrders.map(({ number }) => number),
+      }
 
-    const preparedOrders = groups.map((group) => {
-      const ref = db.collection('orders').doc()
-      const number = orderNumber()
-      const discount = allocations.get(group.storeId) ?? 0
-      const total = money(group.subtotal - discount + group.shippingFee)
-      const items = group.items.map(({ storeId: _storeId, merchantId: _merchantId, ...item }) =>
-        Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined)),
-      )
-      return { group, ref, number, discount, total, items }
-    })
-    const result = {
-      orderIds: preparedOrders.map(({ ref }) => ref.id),
-      orderNumbers: preparedOrders.map(({ number }) => number),
-    }
+      for (const prepared of preparedOrders) {
+        const { group } = prepared
+        const hasCoupon = prepared.discount > 0 && coupon && usageRef
+        transaction.set(prepared.ref, {
+          orderNumber: prepared.number,
+          customerId,
+          customerName: intent.delivery.fullName,
+          customerEmail: intent.delivery.email,
+          customerPhone: intent.delivery.phone,
+          storeId: group.storeId,
+          merchantId: group.store.ownerId,
+          storeName: group.store.name,
+          items: prepared.items,
+          subtotal: group.subtotal,
+          discount: prepared.discount,
+          ...(hasCoupon
+            ? {
+                couponId: coupon.id,
+                couponCode: coupon.code,
+                couponBasis,
+                couponUsageId: usageRef.id,
+              }
+            : {}),
+          shippingFee: group.shippingFee,
+          tax: 0,
+          total: prepared.total,
+          paymentMethod: intent.paymentMethod,
+          cashReceived: false,
+          status: 'pending',
+          shippingAddress: intent.delivery.address,
+          ...(intent.specialInstructions ? { specialInstructions: intent.specialInstructions } : {}),
+          ...(intent.giftNote ? { giftNote: intent.giftNote } : {}),
+          timeline: [{ status: 'pending', at: now, by: customerId, note: 'Order placed' }],
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        })
 
-    for (const prepared of preparedOrders) {
-      const { group } = prepared
-      const hasCoupon = prepared.discount > 0 && coupon && usageRef
-      transaction.set(prepared.ref, {
-        orderNumber: prepared.number,
+        transaction.set(db.collection('activityLogs').doc(), {
+          actorId: customerId,
+          actorName: intent.delivery.fullName,
+          actorRole: 'customer',
+          action: 'order.placed',
+          targetType: 'order',
+          targetId: prepared.ref.id,
+          detail: prepared.number,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+        transaction.set(db.collection('notifications').doc(), {
+          userId: group.store.ownerId,
+          type: 'order_update',
+          title: 'New order received',
+          body: `Order ${prepared.number} — ${prepared.items.length} item(s), total ${prepared.total.toFixed(2)}.`,
+          linkUrl: `/merchant/orders/${prepared.ref.id}`,
+          read: false,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+      }
+
+      for (const [productId, requestedQuantity] of requestedByProduct) {
+        const product = products.get(productId)
+        transaction.update(db.doc(`products/${productId}`), {
+          stock: product.stock - requestedQuantity,
+          soldCount: product.soldCount + requestedQuantity,
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+      }
+
+      if (coupon && couponRef && usageRef && customerUsageRef) {
+        const discountedOrderIds = preparedOrders
+          .filter((prepared) => prepared.discount > 0)
+          .map((prepared) => prepared.ref.id)
+        if (!discountedOrderIds.length || totalDiscount <= 0) {
+          fail('failed-precondition', 'This promo code is not valid.')
+        }
+        const customerUsageCount = customerUsageSnapshot.exists
+          ? Number(customerUsageSnapshot.get('count'))
+          : 0
+        transaction.update(couponRef, {
+          usedCount: Number(coupon.usedCount) + 1,
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+        transaction.set(usageRef, {
+          couponId: coupon.id,
+          couponCode: coupon.code,
+          customerId,
+          orderIds: discountedOrderIds,
+          discount: totalDiscount,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+        transaction.set(customerUsageRef, {
+          couponId: coupon.id,
+          customerId,
+          count: customerUsageCount + 1,
+          lastUsageId: usageRef.id,
+          createdAt: customerUsageSnapshot.exists
+            ? customerUsageSnapshot.get('createdAt')
+            : FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+      }
+
+      transaction.set(requestRef, {
         customerId,
-        customerName: intent.delivery.fullName,
-        customerEmail: intent.delivery.email,
-        customerPhone: intent.delivery.phone,
-        storeId: group.storeId,
-        merchantId: group.store.ownerId,
-        storeName: group.store.name,
-        items: prepared.items,
-        subtotal: group.subtotal,
-        discount: prepared.discount,
-        ...(hasCoupon
-          ? {
-              couponId: coupon.id,
-              couponCode: coupon.code,
-              couponBasis,
-              couponUsageId: usageRef.id,
-            }
-          : {}),
-        shippingFee: group.shippingFee,
-        tax: 0,
-        total: prepared.total,
-        paymentMethod: intent.paymentMethod,
-        cashReceived: false,
-        status: 'pending',
-        shippingAddress: intent.delivery.address,
-        ...(intent.specialInstructions ? { specialInstructions: intent.specialInstructions } : {}),
-        ...(intent.giftNote ? { giftNote: intent.giftNote } : {}),
-        timeline: [{ status: 'pending', at: now, by: customerId, note: 'Order placed' }],
+        idempotencyKeyHash: requestId,
+        requestHash,
+        result,
+        expiresAt: Timestamp.fromMillis(now + IDEMPOTENCY_RETENTION_MS),
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       })
 
+      return result
+    })
+
+    logger.info('checkout_completed', {
+      customerId,
+      requestId,
+      storeOrderCount: result.orderIds.length,
+      resultStatus: 'success',
+      latencyMs: Date.now() - startedAt,
+    })
+    return result
+  } catch (error) {
+    const category = errorCategory(error)
+    logger.warn('checkout_failed', {
+      ...(customerId ? { customerId } : {}),
+      ...(requestId ? { requestId } : {}),
+      resultStatus: 'failure',
+      errorCategory: category,
+      latencyMs: Date.now() - startedAt,
+    })
+    throw safeCallableError(
+      error,
+      'Checkout could not be completed. Please try again.',
+      'Checkout conflicted with another update. Please try again.',
+    )
+  }
+})
+
+export const cancelOrder = onCall(checkoutOptions(), async (request) => {
+  const startedAt = Date.now()
+  const uid = request.auth?.uid
+  let orderId
+
+  try {
+    if (!uid) fail('unauthenticated', 'You must be signed in to cancel an order.')
+    assertPayloadSize(request.data, 8 * 1024, 'Cancellation request is too large.')
+    if (!isObject(request.data)) fail('invalid-argument', 'Cancellation request is invalid.')
+    orderId = cleanIdentifier(request.data.orderId, 'Order')
+    const reason = cleanString(request.data.reason, 'Cancellation reason', 1, 1000)
+
+    const result = await db.runTransaction(async (transaction) => {
+      const userRef = db.doc(`users/${uid}`)
+      const orderRef = db.doc(`orders/${orderId}`)
+      const [userSnapshot, orderSnapshot] = await Promise.all([
+        transaction.get(userRef),
+        transaction.get(orderRef),
+      ])
+      if (!userSnapshot.exists || userSnapshot.get('suspended') === true) {
+        fail('permission-denied', 'This account cannot cancel orders.')
+      }
+      if (!orderSnapshot.exists) fail('not-found', 'Order not found.')
+      const user = userSnapshot.data()
+      const order = orderSnapshot.data()
+      const authorized =
+        user.role === 'admin' ||
+        (user.role === 'customer' && order.customerId === uid) ||
+        (user.role === 'merchant' && order.merchantId === uid)
+      if (!authorized) fail('permission-denied', 'You cannot cancel this order.')
+      if (!['pending', 'confirmed'].includes(order.status)) {
+        fail('failed-precondition', 'Only pending or confirmed orders can be cancelled.')
+      }
+
+      const quantities = new Map()
+      for (const item of order.items ?? []) {
+        if (!item?.productId || !Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
+          fail('failed-precondition', 'Order inventory details are invalid.')
+        }
+        quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity)
+      }
+      const productRefs = [...quantities.keys()].map((id) => db.doc(`products/${id}`))
+      const productSnapshots = productRefs.length ? await transaction.getAll(...productRefs) : []
+      const products = new Map(productSnapshots.map((snapshot) => [snapshot.id, snapshot.data()]))
+      if (products.size !== quantities.size) {
+        fail('failed-precondition', 'Order inventory details are invalid.')
+      }
+
+      const now = Date.now()
+      transaction.update(orderRef, {
+        status: 'cancelled',
+        cancelReason: reason,
+        timeline: FieldValue.arrayUnion({ status: 'cancelled', at: now, by: uid, note: reason }),
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+      for (const [productId, quantity] of quantities) {
+        const product = products.get(productId)
+        const stock = Number(product.stock)
+        const soldCount = Number(product.soldCount)
+        if (!Number.isSafeInteger(stock) || !Number.isSafeInteger(soldCount) || soldCount < quantity) {
+          fail('failed-precondition', 'Order inventory details are invalid.')
+        }
+        transaction.update(db.doc(`products/${productId}`), {
+          stock: stock + quantity,
+          soldCount: soldCount - quantity,
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+      }
       transaction.set(db.collection('activityLogs').doc(), {
-        actorId: customerId,
-        actorName: intent.delivery.fullName,
-        actorRole: 'customer',
-        action: 'order.placed',
+        actorId: uid,
+        actorName: user.displayName ?? 'Vendora user',
+        actorRole: user.role,
+        action: 'order.status_changed',
         targetType: 'order',
-        targetId: prepared.ref.id,
-        detail: prepared.number,
+        targetId: orderId,
+        detail: `${order.orderNumber} → cancelled`,
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       })
       transaction.set(db.collection('notifications').doc(), {
-        userId: group.store.ownerId,
+        userId: order.merchantId,
         type: 'order_update',
-        title: 'New order received',
-        body: `Order ${prepared.number} — ${prepared.items.length} item(s), total ${prepared.total.toFixed(2)}.`,
-        linkUrl: `/merchant/orders/${prepared.ref.id}`,
+        title: `Order ${order.orderNumber} cancelled`,
+        body: reason,
+        linkUrl: `/merchant/orders/${orderId}`,
         read: false,
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       })
-    }
-
-    for (const [productId, requestedQuantity] of requestedByProduct) {
-      const product = products.get(productId)
-      transaction.update(db.doc(`products/${productId}`), {
-        stock: product.stock - requestedQuantity,
-        soldCount: product.soldCount + requestedQuantity,
-        updatedAt: FieldValue.serverTimestamp(),
-      })
-    }
-
-    if (coupon && couponRef && usageRef && customerUsageRef) {
-      const discountedOrderIds = preparedOrders
-        .filter((prepared) => prepared.discount > 0)
-        .map((prepared) => prepared.ref.id)
-      if (!discountedOrderIds.length || totalDiscount <= 0) {
-        fail('failed-precondition', 'This promo code is not valid.')
-      }
-      const customerUsageCount = customerUsageSnapshot.exists
-        ? Number(customerUsageSnapshot.get('count'))
-        : 0
-      transaction.update(couponRef, {
-        usedCount: Number(coupon.usedCount) + 1,
-        updatedAt: FieldValue.serverTimestamp(),
-      })
-      transaction.set(usageRef, {
-        couponId: coupon.id,
-        couponCode: coupon.code,
-        customerId,
-        orderIds: discountedOrderIds,
-        discount: totalDiscount,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      })
-      transaction.set(customerUsageRef, {
-        couponId: coupon.id,
-        customerId,
-        count: customerUsageCount + 1,
-        lastUsageId: usageRef.id,
-        createdAt: customerUsageSnapshot.exists
-          ? customerUsageSnapshot.get('createdAt')
-          : FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      })
-    }
-
-    transaction.set(requestRef, {
-      customerId,
-      requestHash,
-      result,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
+      return { orderId, status: 'cancelled' }
     })
 
+    logger.info('order_cancellation_completed', {
+      uid,
+      orderId,
+      resultStatus: 'success',
+      latencyMs: Date.now() - startedAt,
+    })
     return result
-  })
-})
-
-export const cancelOrder = onCall(checkoutOptions(), async (request) => {
-  if (!request.auth?.uid) fail('unauthenticated', 'You must be signed in to cancel an order.')
-  if (!isObject(request.data)) fail('invalid-argument', 'Cancellation request is invalid.')
-  const uid = request.auth.uid
-  const orderId = cleanString(request.data.orderId, 'Order', 1, 128)
-  const reason = cleanString(request.data.reason, 'Cancellation reason', 1, 1000)
-
-  return db.runTransaction(async (transaction) => {
-    const userRef = db.doc(`users/${uid}`)
-    const orderRef = db.doc(`orders/${orderId}`)
-    const [userSnapshot, orderSnapshot] = await Promise.all([
-      transaction.get(userRef),
-      transaction.get(orderRef),
-    ])
-    if (!userSnapshot.exists || userSnapshot.get('suspended') === true) {
-      fail('permission-denied', 'This account cannot cancel orders.')
-    }
-    if (!orderSnapshot.exists) fail('not-found', 'Order not found.')
-    const user = userSnapshot.data()
-    const order = orderSnapshot.data()
-    const authorized =
-      user.role === 'admin' ||
-      (user.role === 'customer' && order.customerId === uid) ||
-      (user.role === 'merchant' && order.merchantId === uid)
-    if (!authorized) fail('permission-denied', 'You cannot cancel this order.')
-    if (!['pending', 'confirmed'].includes(order.status)) {
-      fail('failed-precondition', 'Only pending or confirmed orders can be cancelled.')
-    }
-
-    const quantities = new Map()
-    for (const item of order.items ?? []) {
-      if (!item?.productId || !Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
-        fail('failed-precondition', 'Order inventory details are invalid.')
-      }
-      quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity)
-    }
-    const productRefs = [...quantities.keys()].map((id) => db.doc(`products/${id}`))
-    const productSnapshots = productRefs.length
-      ? await transaction.getAll(...productRefs)
-      : []
-    const products = new Map(productSnapshots.map((snapshot) => [snapshot.id, snapshot.data()]))
-    if (products.size !== quantities.size) {
-      fail('failed-precondition', 'Order inventory details are invalid.')
-    }
-
-    const now = Date.now()
-    transaction.update(orderRef, {
-      status: 'cancelled',
-      cancelReason: reason,
-      timeline: FieldValue.arrayUnion({ status: 'cancelled', at: now, by: uid, note: reason }),
-      updatedAt: FieldValue.serverTimestamp(),
+  } catch (error) {
+    logger.warn('order_cancellation_failed', {
+      ...(uid ? { uid } : {}),
+      ...(orderId ? { orderId } : {}),
+      resultStatus: 'failure',
+      errorCategory: errorCategory(error),
+      latencyMs: Date.now() - startedAt,
     })
-    for (const [productId, quantity] of quantities) {
-      const product = products.get(productId)
-      const stock = Number(product.stock)
-      const soldCount = Number(product.soldCount)
-      if (!Number.isSafeInteger(stock) || !Number.isSafeInteger(soldCount) || soldCount < quantity) {
-        fail('failed-precondition', 'Order inventory details are invalid.')
-      }
-      transaction.update(db.doc(`products/${productId}`), {
-        stock: stock + quantity,
-        soldCount: soldCount - quantity,
-        updatedAt: FieldValue.serverTimestamp(),
-      })
-    }
-    transaction.set(db.collection('activityLogs').doc(), {
-      actorId: uid,
-      actorName: user.displayName ?? 'Vendora user',
-      actorRole: user.role,
-      action: 'order.status_changed',
-      targetType: 'order',
-      targetId: orderId,
-      detail: `${order.orderNumber} → cancelled`,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    })
-    transaction.set(db.collection('notifications').doc(), {
-      userId: order.merchantId,
-      type: 'order_update',
-      title: `Order ${order.orderNumber} cancelled`,
-      body: reason,
-      linkUrl: `/merchant/orders/${orderId}`,
-      read: false,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    })
-    return { orderId, status: 'cancelled' }
-  })
+    throw safeCallableError(
+      error,
+      'Order cancellation could not be completed. Please try again.',
+      'Order cancellation conflicted with another update. Please try again.',
+    )
+  }
 })
