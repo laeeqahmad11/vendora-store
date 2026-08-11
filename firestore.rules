@@ -783,40 +783,9 @@ service cloud.firestore {
       // checkout function bypass rules; no browser identity may create one.
       allow create: if false;
 
-      allow update: if
-        // Merchant fulfilment and cash confirmation fields only.
-        (isMerchant()
-          && resource.data.merchantId == request.auth.uid
-          && ownsStore(resource.data.storeId)
-          && request.resource.data.customerId == resource.data.customerId
-          && request.resource.data.merchantId == resource.data.merchantId
-          && request.resource.data.storeId == resource.data.storeId
-          && request.resource.data.createdAt == resource.data.createdAt
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status', 'cashReceived', 'cashReceivedAt', 'timeline',
-            'cancelReason', 'returnReason', 'updatedAt'
-          ])
-          && validOrderStatus(request.resource.data.status))
-
-        // Customer return request only. Cancellation restores inventory and
-        // therefore runs through the trusted backend transaction as well.
-        || (isCustomer()
-          && resource.data.customerId == request.auth.uid
-          && request.resource.data.customerId == resource.data.customerId
-          && request.resource.data.merchantId == resource.data.merchantId
-          && request.resource.data.storeId == resource.data.storeId
-          && request.resource.data.cashReceived == resource.data.cashReceived
-          && request.resource.data.status == 'refund_requested'
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status', 'timeline', 'cancelReason', 'returnReason', 'updatedAt'
-          ]))
-
-        // Admin lifecycle moderation without changing financial/order content.
-        || (isAdmin()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status', 'timeline', 'cancelReason', 'returnReason', 'updatedAt'
-          ])
-          && validOrderStatus(request.resource.data.status));
+      // Every order mutation is server-only. Trusted Functions use the Admin
+      // SDK and enforce the state machine transactionally.
+      allow update: if false;
 
       allow delete: if false;
     }
@@ -1043,7 +1012,7 @@ service cloud.firestore {
         && currentUserExists()
         && request.resource.data.actorId == request.auth.uid
         && request.resource.data.actorRole == userDoc().role
-        && request.resource.data.action != 'order.placed';
+        && !request.resource.data.action.matches('order\\..*');
       allow update, delete: if false;
     }
 

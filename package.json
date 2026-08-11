@@ -21,6 +21,7 @@
     "test:security:reviews": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only firestore \"node --test tests/security/reviews.rules.node.mjs\"",
     "test:security:discounts": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only firestore \"node --test tests/security/discounts.rules.node.mjs\"",
     "test:security:checkout": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only auth,firestore,functions \"node --test tests/security/checkout-backend.node.mjs\"",
+    "test:security:orders": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only auth,firestore,functions \"node --test tests/security/order-lifecycle-backend.node.mjs\"",
     "test:security:authorization": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only firestore \"node --test tests/security/firestore-authorization.rules.node.mjs\"",
     "test:security:moderation": "node --use-system-ca scripts/e2e/firebase-cli-local.mjs emulators:exec --project demo-vendora-e2e --only auth,firestore,functions \"node --test tests/security/store-moderation-backend.node.mjs\"",
     "test:e2e:ui": "playwright test --ui",

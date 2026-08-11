@@ -780,6 +780,250 @@ export const placeOrders = onCall(checkoutOptions(), async (request) => {
   }
 })
 
+const MERCHANT_FULFILLMENT_TRANSITIONS = Object.freeze({
+  pending: 'confirmed',
+  confirmed: 'packed',
+  packed: 'ready',
+  ready: 'dispatched',
+  dispatched: 'delivered',
+})
+
+function lifecycleRequest(request, label) {
+  const uid = request.auth?.uid
+  if (!uid) fail('unauthenticated', `You must be signed in to ${label}.`)
+  assertPayloadSize(request.data, 8 * 1024, 'Order lifecycle request is too large.')
+  if (!isObject(request.data)) fail('invalid-argument', 'Order lifecycle request is invalid.')
+  return {
+    uid,
+    orderId: cleanIdentifier(request.data.orderId, 'Order'),
+  }
+}
+
+async function lifecycleContext(transaction, uid, orderId) {
+  const userRef = db.doc(`users/${uid}`)
+  const orderRef = db.doc(`orders/${orderId}`)
+  const [userSnapshot, orderSnapshot] = await Promise.all([
+    transaction.get(userRef),
+    transaction.get(orderRef),
+  ])
+  if (!userSnapshot.exists || userSnapshot.get('suspended') === true) {
+    fail('permission-denied', 'An active account is required.')
+  }
+  if (!orderSnapshot.exists) fail('not-found', 'Order not found.')
+  return {
+    user: userSnapshot.data(),
+    order: orderSnapshot.data(),
+    orderRef,
+  }
+}
+
+async function assertMerchantLifecycleAuthority(transaction, uid, context, { allowAdmin = false } = {}) {
+  const { user, order } = context
+  if (allowAdmin && user.role === 'admin') return
+  if (user.role !== 'merchant') fail('permission-denied', 'Merchant access is required.')
+  if (order.merchantId !== uid || typeof order.storeId !== 'string') {
+    fail('permission-denied', 'You cannot manage this order.')
+  }
+  const storeSnapshot = await transaction.get(db.doc(`stores/${order.storeId}`))
+  if (
+    !storeSnapshot.exists ||
+    storeSnapshot.get('ownerId') !== uid ||
+    storeSnapshot.get('status') !== 'approved'
+  ) {
+    fail('permission-denied', 'You cannot manage this order.')
+  }
+}
+
+function appendOrderActivity(transaction, { uid, user, order, orderId, action, detail }) {
+  transaction.set(db.collection('activityLogs').doc(), {
+    actorId: uid,
+    actorName: user.displayName ?? 'Vendora user',
+    actorRole: user.role,
+    action,
+    targetType: 'order',
+    targetId: orderId,
+    detail: detail ?? order.orderNumber,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  })
+}
+
+function appendOrderNotification(transaction, userId, orderId, title, body, linkPrefix = '/account/orders') {
+  transaction.set(db.collection('notifications').doc(), {
+    userId,
+    type: 'order_update',
+    title,
+    body,
+    linkUrl: `${linkPrefix}/${orderId}`,
+    read: false,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  })
+}
+
+async function runLifecycleTransaction(operation, internalMessage) {
+  try {
+    return await operation()
+  } catch (error) {
+    throw safeCallableError(error, internalMessage, 'Order changed while it was being updated. Please try again.')
+  }
+}
+
+/** Advance one exact step in the merchant fulfillment state machine. */
+export const transitionOrder = onCall(checkoutOptions(), async (request) => {
+  const { uid, orderId } = lifecycleRequest(request, 'update an order')
+  const nextStatus = cleanIdentifier(request.data.nextStatus, 'Next status', 1, 32)
+  const note = cleanString(request.data.note, 'Note', 1, 1000, { optional: true })
+
+  return runLifecycleTransaction(() => db.runTransaction(async (transaction) => {
+    const context = await lifecycleContext(transaction, uid, orderId)
+    await assertMerchantLifecycleAuthority(transaction, uid, context, { allowAdmin: true })
+    const { user, order, orderRef } = context
+    if (MERCHANT_FULFILLMENT_TRANSITIONS[order.status] !== nextStatus) {
+      fail('failed-precondition', `Order cannot transition from ${order.status} to ${nextStatus}.`)
+    }
+
+    const now = Date.now()
+    transaction.update(orderRef, {
+      status: nextStatus,
+      timeline: FieldValue.arrayUnion({ status: nextStatus, at: now, by: uid, ...(note ? { note } : {}) }),
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    appendOrderActivity(transaction, {
+      uid, user, order, orderId,
+      action: 'order.status_changed',
+      detail: `${order.orderNumber} -> ${nextStatus}`,
+    })
+    appendOrderNotification(
+      transaction,
+      order.customerId,
+      orderId,
+      `Order ${order.orderNumber} update`,
+      `Your order is now ${nextStatus.replace(/_/g, ' ')}.`,
+    )
+    return { orderId, status: nextStatus }
+  }), 'Order could not be updated. Please try again.')
+})
+
+/** Confirm collection of the full COD amount and complete a delivered order. */
+export const confirmOrderCash = onCall(checkoutOptions(), async (request) => {
+  const { uid, orderId } = lifecycleRequest(request, 'confirm cash receipt')
+
+  return runLifecycleTransaction(() => db.runTransaction(async (transaction) => {
+    const context = await lifecycleContext(transaction, uid, orderId)
+    await assertMerchantLifecycleAuthority(transaction, uid, context)
+    const { user, order, orderRef } = context
+    if (order.status !== 'delivered' || order.paymentMethod !== 'cod' || order.cashReceived !== false) {
+      fail('failed-precondition', 'Cash can only be confirmed once for a delivered COD order.')
+    }
+
+    const now = Date.now()
+    transaction.update(orderRef, {
+      cashReceived: true,
+      cashReceivedAt: now,
+      status: 'completed',
+      timeline: FieldValue.arrayUnion(
+        { status: 'cash_received', at: now, by: uid, note: 'Cash payment confirmed by merchant' },
+        { status: 'completed', at: now, by: uid, note: 'Order completed automatically' },
+      ),
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    appendOrderActivity(transaction, {
+      uid, user, order, orderId,
+      action: 'order.cash_received',
+      detail: order.orderNumber,
+    })
+    appendOrderNotification(
+      transaction,
+      order.customerId,
+      orderId,
+      `Order ${order.orderNumber} completed`,
+      'Payment received - thank you for shopping with us!',
+    )
+    return { orderId, status: 'completed', cashReceived: true }
+  }), 'Cash confirmation could not be completed. Please try again.')
+})
+
+/** Customer-owned transition into refund review. */
+export const requestOrderRefund = onCall(checkoutOptions(), async (request) => {
+  const { uid, orderId } = lifecycleRequest(request, 'request a return')
+  const reason = cleanString(request.data.reason, 'Return reason', 1, 1000)
+
+  return runLifecycleTransaction(() => db.runTransaction(async (transaction) => {
+    const context = await lifecycleContext(transaction, uid, orderId)
+    const { user, order, orderRef } = context
+    if (user.role !== 'customer' || order.customerId !== uid) {
+      fail('permission-denied', 'You cannot request a return for this order.')
+    }
+    if (!['delivered', 'completed'].includes(order.status)) {
+      fail('failed-precondition', 'Returns can only be requested after delivery.')
+    }
+
+    const now = Date.now()
+    transaction.update(orderRef, {
+      status: 'refund_requested',
+      returnReason: reason,
+      timeline: FieldValue.arrayUnion({ status: 'refund_requested', at: now, by: uid, note: reason }),
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    appendOrderActivity(transaction, {
+      uid, user, order, orderId,
+      action: 'order.status_changed',
+      detail: `${order.orderNumber} -> refund_requested`,
+    })
+    appendOrderNotification(
+      transaction,
+      order.merchantId,
+      orderId,
+      `Return requested for ${order.orderNumber}`,
+      reason,
+      '/merchant/orders',
+    )
+    return { orderId, status: 'refund_requested' }
+  }), 'Return request could not be completed. Please try again.')
+})
+
+/** Approve a return or decline the refund without changing inventory semantics. */
+export const decideOrderReturn = onCall(checkoutOptions(), async (request) => {
+  const { uid, orderId } = lifecycleRequest(request, 'review a return')
+  const decision = cleanIdentifier(request.data.decision, 'Decision', 1, 16)
+  if (!['approve', 'decline'].includes(decision)) fail('invalid-argument', 'Decision is invalid.')
+
+  return runLifecycleTransaction(() => db.runTransaction(async (transaction) => {
+    const context = await lifecycleContext(transaction, uid, orderId)
+    await assertMerchantLifecycleAuthority(transaction, uid, context, { allowAdmin: true })
+    const { user, order, orderRef } = context
+    if (order.status !== 'refund_requested') {
+      fail('failed-precondition', 'Only a pending refund request can be reviewed.')
+    }
+
+    const nextStatus = decision === 'approve' ? 'returned' : 'completed'
+    const reviewer = user.role === 'admin' ? 'administrator' : 'merchant'
+    const note = decision === 'approve'
+      ? `Return approved by ${reviewer}`
+      : `Refund request declined by ${reviewer}`
+    const now = Date.now()
+    transaction.update(orderRef, {
+      status: nextStatus,
+      timeline: FieldValue.arrayUnion({ status: nextStatus, at: now, by: uid, note }),
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    appendOrderActivity(transaction, {
+      uid, user, order, orderId,
+      action: 'order.status_changed',
+      detail: `${order.orderNumber} -> ${nextStatus}`,
+    })
+    appendOrderNotification(
+      transaction,
+      order.customerId,
+      orderId,
+      `Order ${order.orderNumber} update`,
+      decision === 'approve' ? 'Your return request was approved.' : 'Your refund request was declined.',
+    )
+    return { orderId, status: nextStatus }
+  }), 'Return decision could not be completed. Please try again.')
+})
+
 export const cancelOrder = onCall(checkoutOptions(), async (request) => {
   const startedAt = Date.now()
   const uid = request.auth?.uid

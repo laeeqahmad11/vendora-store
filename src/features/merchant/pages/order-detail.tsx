@@ -1063,11 +1063,10 @@ export default function OrderDetailPage() {
         description="The order will be marked as returned. Arrange the pickup/refund with the customer directly."
         confirmLabel="Approve return"
         onConfirm={async () => {
-          await ordersService.setStatus(
+          await ordersService.decideReturn(
             order,
-            'returned',
             actor,
-            'Return approved by merchant',
+            'approve',
           )
 
           toast.success('Return approved')
@@ -1088,11 +1087,10 @@ export default function OrderDetailPage() {
         confirmLabel="Decline refund"
         destructive
         onConfirm={async () => {
-          await ordersService.setStatus(
+          await ordersService.decideReturn(
             order,
-            'completed',
             actor,
-            'Refund request declined by merchant',
+            'decline',
           )
 
           toast.success(
