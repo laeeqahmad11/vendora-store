@@ -404,6 +404,69 @@ service cloud.firestore {
       ]);
     }
 
+    function productMaterialFieldsChanged() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'name', 'description', 'images', 'videoUrl',
+        'price', 'compareAtPrice', 'currency', 'sku', 'barcode',
+        'minOrderQty', 'maxOrderQty',
+        'categoryId', 'subcategoryId', 'brandId', 'tags', 'collectionIds',
+        'variantOptions', 'variants', 'specifications',
+        'weight', 'dimensions', 'warranty', 'returnPolicy', 'shippingInfo',
+        'relatedProductIds', 'seo', 'flashSale'
+      ]);
+    }
+
+    function merchantProductFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'name', 'description', 'images', 'videoUrl',
+        'price', 'compareAtPrice', 'currency', 'sku', 'barcode',
+        'stock', 'lowStockThreshold', 'minOrderQty', 'maxOrderQty',
+        'categoryId', 'subcategoryId', 'brandId', 'tags', 'collectionIds',
+        'variantOptions', 'variants', 'specifications',
+        'weight', 'dimensions', 'warranty', 'returnPolicy', 'shippingInfo',
+        'relatedProductIds', 'seo', 'flashSale',
+        'status', 'publiclyVisible', 'rejectionReason', 'updatedAt'
+      ]);
+    }
+
+    function validMerchantProductStateTransition() {
+      return request.resource.data.status == resource.data.status
+        ? (request.resource.data.publiclyVisible == resource.data.publiclyVisible
+          && request.resource.data.get('rejectionReason', '')
+               == resource.data.get('rejectionReason', '')
+          && (request.resource.data.status == 'approved'
+              ? !productMaterialFieldsChanged()
+              : request.resource.data.publiclyVisible == false))
+        : request.resource.data.status == 'pending'
+          ? (resource.data.status in ['draft', 'rejected', 'approved']
+            && request.resource.data.publiclyVisible == false
+            && request.resource.data.rejectionReason == '')
+          : request.resource.data.status == 'archived'
+            ? (resource.data.status != 'archived'
+              && request.resource.data.publiclyVisible == false
+              && request.resource.data.get('rejectionReason', '')
+                   == resource.data.get('rejectionReason', ''))
+            : request.resource.data.status == 'draft'
+              ? (resource.data.status == 'archived'
+                && request.resource.data.publiclyVisible == false
+                && request.resource.data.get('rejectionReason', '')
+                     == resource.data.get('rejectionReason', ''))
+              : false;
+    }
+
+    function validMerchantProductUpdate() {
+      return isMerchant()
+        && resource.data.merchantId == request.auth.uid
+        && request.resource.data.merchantId == resource.data.merchantId
+        && request.resource.data.storeId == resource.data.storeId
+        && ownsStore(resource.data.storeId)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        && merchantProductFieldsOnly()
+        && aggregateFieldsUnchanged()
+        && validMerchantProductStateTransition();
+    }
+
     function validProductAggregateTransition(productId) {
       let reviewId = request.resource.data.ratingReviewId;
       let existedBefore = exists(reviewPath(reviewId));
@@ -720,6 +783,19 @@ service cloud.firestore {
         && ownsStore(request.resource.data.storeId)
         && request.resource.data.status in ['draft', 'pending']
         && request.resource.data.publiclyVisible == false
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && !request.resource.data.keys().hasAny([
+          'publishedAt', 'ratingReviewId', 'ratingReviewVersion'
+        ])
+        && (!request.resource.data.keys().hasAny(['rejectionReason'])
+            || request.resource.data.rejectionReason == '')
+        && (!request.resource.data.keys().hasAny(['featured'])
+            || request.resource.data.featured == false)
+        && (!request.resource.data.keys().hasAny(['trending'])
+            || request.resource.data.trending == false)
+        && (!request.resource.data.keys().hasAny(['recommended'])
+            || request.resource.data.recommended == false)
         && request.resource.data.rating == 0
         && request.resource.data.ratingCount == 0
         && request.resource.data.ratingSum == 0
@@ -736,21 +812,16 @@ service cloud.firestore {
 
         || (isAdmin()
             && aggregateFieldsUnchanged()
-            && request.resource.data.publiclyVisible
-                 == resource.data.publiclyVisible)
+            && ((request.resource.data.status == 'approved'
+                  && request.resource.data.publiclyVisible
+                       == resource.data.publiclyVisible)
+                || (request.resource.data.status != 'approved'
+                  && request.resource.data.publiclyVisible == false)))
 
-        // Merchant edits own product without changing ownership.
-        || (isMerchant()
-            && resource.data.merchantId == request.auth.uid
-            && request.resource.data.merchantId == resource.data.merchantId
-            && request.resource.data.storeId == resource.data.storeId
-            && ownsStore(resource.data.storeId)
-            && request.resource.data.createdAt == resource.data.createdAt
-            && request.resource.data.publiclyVisible
-                 == resource.data.publiclyVisible
-            && aggregateFieldsUnchanged()
-            && (request.resource.data.status != 'approved'
-                || resource.data.status == 'approved'))
+        // Merchant edits are field-limited and follow the moderation state
+        // machine. Material changes to an approved listing must atomically
+        // enter pending review and become non-public.
+        || validMerchantProductUpdate()
 
         // Current client-side view counter.
         || (isActiveUser()

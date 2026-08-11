@@ -5,6 +5,7 @@ import {
   assertProductRow,
   completeMerchantProductLifecycle,
   product,
+  productRow,
   productTab,
   resetSeededEmulatorData,
   summaryCard,
@@ -34,7 +35,7 @@ test('admin approval publishes a merchant product to the public store', async ({
   browser,
   page: merchantPage,
 }) => {
-  test.setTimeout(90_000)
+  test.setTimeout(150_000)
   const appURL = baseURL ?? 'http://127.0.0.1:5173'
 
   await completeMerchantProductLifecycle(merchantPage)
@@ -87,6 +88,50 @@ test('admin approval publishes a merchant product to the public store', async ({
   await expect(publicPage).toHaveURL(/\/products\/[^/]+$/)
   await expect(publicPage.getByRole('heading', { name: product.name, exact: true })).toBeVisible()
   await expect(publicPage.getByText(product.formattedPrice, { exact: true }).first()).toBeVisible()
+
+  // A material merchant edit atomically leaves approval and public visibility.
+  await merchantPage.goto('/merchant/products')
+  await productRow(merchantPage).getByRole('link', { name: product.name, exact: true }).click()
+  await merchantPage.getByPlaceholder('0.00').nth(0).fill(product.reapprovedPrice)
+  await merchantPage.getByRole('button', { name: 'Save changes', exact: true }).click()
+  await expect(
+    merchantPage.getByText('Material changes saved and sent for reapproval', { exact: true }),
+  ).toBeVisible()
+  await assertProductRow(merchantPage, product.updatedStock, 'Pending Review')
+  await expect(productRow(merchantPage).getByText(product.reapprovedFormattedPrice, { exact: true })).toBeVisible()
+
+  await publicPage.goto('/stores/e2e-approved-store')
+  await expect(publicPage.getByRole('link').filter({ hasText: product.name })).toHaveCount(0)
+
+  // The changed version returns to the existing queue and is public only after
+  // a second administrator approval.
+  await adminPage.goto('/admin/products')
+  await expect(adminPage.getByRole('tab', { name: /Approval queue\s+1/ })).toBeVisible()
+  const rereviewRow = adminProductRow(adminPage)
+  await expect(rereviewRow.getByText(product.reapprovedFormattedPrice, { exact: true })).toBeVisible()
+  await rereviewRow.getByRole('button', { name: 'Review', exact: true }).click()
+  const rereviewDialog = adminPage.getByRole('dialog')
+  await rereviewDialog.getByRole('button', { name: 'Approve', exact: true }).click()
+  await expect(adminPage.getByText('Product approved', { exact: true })).toBeVisible()
+  await expect(rereviewDialog).toBeHidden()
+
+  await merchantPage.goto('/merchant/products')
+  await assertProductRow(merchantPage, product.updatedStock, 'Approved')
+  await publicPage.goto('/stores/e2e-approved-store')
+  const republishedProduct = publicPage.getByRole('link').filter({ hasText: product.name }).first()
+  await expect(republishedProduct).toBeVisible()
+  await expect(republishedProduct.getByText(product.reapprovedFormattedPrice, { exact: true })).toBeVisible()
+
+  // Top-level inventory is operational: changing it does not reopen moderation.
+  await productRow(merchantPage).getByRole('link', { name: product.name, exact: true }).click()
+  await merchantPage.getByPlaceholder('0', { exact: true }).fill(product.inventoryOnlyStock)
+  await merchantPage.getByRole('button', { name: 'Save changes', exact: true }).click()
+  await expect(merchantPage.getByText('Product updated', { exact: true })).toBeVisible()
+  await assertProductRow(merchantPage, product.inventoryOnlyStock, 'Approved')
+  await adminPage.goto('/admin/products')
+  await expect(adminPage.getByRole('heading', { name: 'Queue is clear', exact: true })).toBeVisible()
+  await publicPage.goto('/stores/e2e-approved-store')
+  await expect(publicPage.getByRole('link').filter({ hasText: product.name }).first()).toBeVisible()
 
   await Promise.all([adminPage.context().close(), publicPage.context().close()])
 })

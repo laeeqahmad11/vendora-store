@@ -506,7 +506,7 @@ export const placeOrders = onCall(checkoutOptions(), async (request) => {
       const requestedByProduct = new Map()
       const authoritativeItems = intent.items.map((item) => {
         const product = products.get(item.productId)
-        if (!product || product.status !== 'approved') {
+        if (!product || product.status !== 'approved' || product.publiclyVisible !== true) {
           fail('failed-precondition', productUnavailableMessage)
         }
         requestedByProduct.set(item.productId, (requestedByProduct.get(item.productId) ?? 0) + item.quantity)

@@ -124,6 +124,7 @@ async function seed() {
       setDoc(doc(db, 'merchantApplications/store-other'), application('store-other', 'merchant-other', 'approved')),
       setDoc(doc(db, 'merchantApplications/application-rejected'), application('application-rejected', 'applicant-rejected', 'rejected')),
       setDoc(doc(db, 'products/product-public'), product('store-approved', 'merchant-active')),
+      setDoc(doc(db, 'products/product-material-edit'), product('store-approved', 'merchant-active')),
       setDoc(doc(db, 'products/product-other'), product('store-other', 'merchant-other')),
       setDoc(doc(db, 'products/product-suspended-store'), product('store-suspended', 'merchant-other', { publiclyVisible: false })),
       setDoc(doc(db, 'users/customer-suspended/addresses/home'), {
@@ -193,7 +194,14 @@ test('active approved merchants can edit their own resources but not another sto
     updatedAt: serverTimestamp(),
   }))
   await assertSucceeds(updateDoc(doc(clients['merchant-active'], 'products/product-public'), {
-    name: 'Updated own product', updatedAt: serverTimestamp(),
+    stock: 12, updatedAt: serverTimestamp(),
+  }))
+  await assertFails(updateDoc(doc(clients['merchant-active'], 'products/product-material-edit'), {
+    name: 'Material bypass attempt', updatedAt: serverTimestamp(),
+  }))
+  await assertSucceeds(updateDoc(doc(clients['merchant-active'], 'products/product-material-edit'), {
+    name: 'Updated own product', status: 'pending', publiclyVisible: false,
+    rejectionReason: '', updatedAt: serverTimestamp(),
   }))
   await assertFails(updateDoc(doc(clients['merchant-active'], 'stores/store-other'), {
     description: 'Cross-store mutation attempt.', updatedAt: serverTimestamp(),

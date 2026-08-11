@@ -6,7 +6,7 @@ import toast from 'react-hot-toast'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getErrorMessage } from '@/lib/utils'
 import { catalogService } from '@/services/catalog.service'
-import { productsService } from '@/services/products.service'
+import { hasMaterialProductChanges, productsService } from '@/services/products.service'
 import type { Product, ProductVariant } from '@/types'
 import { localInputToMs, msToLocalInput, useMerchant } from '../../common'
 import { productFormSchema, type ProductFormValues } from '../product-form.schema'
@@ -204,13 +204,23 @@ export function useProductForm() {
 
     try {
       if (isEdit && productQ.data) {
-        const status = submitForReview ? 'pending' : productQ.data.status
+        const requiresReapproval =
+          productQ.data.status === 'approved' && hasMaterialProductChanges(productQ.data, payload)
+        const status = submitForReview || requiresReapproval ? 'pending' : productQ.data.status
         await productsService.update(productQ.data.id, {
           ...payload,
           status,
-          ...(submitForReview ? { rejectionReason: '' } : {}),
+          ...((submitForReview || requiresReapproval)
+            ? { publiclyVisible: false, rejectionReason: '' }
+            : {}),
         } as Partial<Product>)
-        toast.success(submitForReview ? 'Product updated & submitted for review' : 'Product updated')
+        toast.success(
+          requiresReapproval
+            ? 'Material changes saved and sent for reapproval'
+            : submitForReview
+              ? 'Product updated & submitted for review'
+              : 'Product updated',
+        )
       } else {
         await productsService.create({
           ...payload,

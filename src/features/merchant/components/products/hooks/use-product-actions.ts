@@ -58,10 +58,16 @@ export function useProductActions({ invalidateProducts, clearSelection }: UsePro
     run(() => productsService.submitForReview(productId), 'Submitted for review')
 
   const archiveProduct = (productId: string) =>
-    run(() => productsService.update(productId, { status: 'archived' }), 'Product archived')
+    run(
+      () => productsService.update(productId, { status: 'archived', publiclyVisible: false }),
+      'Product archived',
+    )
 
   const unarchiveProduct = (productId: string) =>
-    run(() => productsService.update(productId, { status: 'draft' }), 'Product unarchived')
+    run(
+      () => productsService.update(productId, { status: 'draft', publiclyVisible: false }),
+      'Product unarchived',
+    )
 
   const deleteProduct = (productId: string) => run(() => productsService.remove(productId), 'Product deleted')
 
@@ -73,7 +79,7 @@ export function useProductActions({ invalidateProducts, clearSelection }: UsePro
         Promise.all(
           ids.map((id) =>
             action === 'archive'
-              ? productsService.update(id, { status: 'archived' })
+              ? productsService.update(id, { status: 'archived', publiclyVisible: false })
               : productsService.submitForReview(id),
           ),
         ),

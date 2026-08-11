@@ -23,6 +23,56 @@ import {
 import { slugify } from '@/lib/utils'
 import type { PaginatedResult, Product, ProductStatus } from '@/types'
 
+export const PRODUCT_MODERATION_FIELDS = [
+  'name',
+  'description',
+  'images',
+  'videoUrl',
+  'price',
+  'compareAtPrice',
+  'currency',
+  'sku',
+  'barcode',
+  'minOrderQty',
+  'maxOrderQty',
+  'categoryId',
+  'subcategoryId',
+  'brandId',
+  'tags',
+  'collectionIds',
+  'variantOptions',
+  'variants',
+  'specifications',
+  'weight',
+  'dimensions',
+  'warranty',
+  'returnPolicy',
+  'shippingInfo',
+  'relatedProductIds',
+  'seo',
+  'flashSale',
+] as const satisfies readonly (keyof Product)[]
+
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value, index) => valuesEqual(value, right[index]))
+  }
+  if (left && right && typeof left === 'object' && typeof right === 'object') {
+    const leftRecord = left as Record<string, unknown>
+    const rightRecord = right as Record<string, unknown>
+    const keys = new Set([...Object.keys(leftRecord), ...Object.keys(rightRecord)])
+    return [...keys].every((key) => valuesEqual(leftRecord[key], rightRecord[key]))
+  }
+  return false
+}
+
+export function hasMaterialProductChanges(current: Product, changes: Partial<Product>): boolean {
+  return PRODUCT_MODERATION_FIELDS.some(
+    (field) => changes[field] !== undefined && !valuesEqual(current[field], changes[field]),
+  )
+}
+
 export interface ProductFilters {
   categoryId?: string
   subcategoryId?: string
@@ -208,13 +258,18 @@ async getBySlug(slug: string) {
 
   /** Merchant re-submits for review; admin then approves/rejects */
   async submitForReview(id: string) {
-    await updateDocument(COLLECTIONS.products, id, { status: 'pending', rejectionReason: '' })
+    await updateDocument(COLLECTIONS.products, id, {
+      status: 'pending',
+      publiclyVisible: false,
+      rejectionReason: '',
+    })
   },
 
   async setStatus(id: string, status: ProductStatus, rejectionReason?: string) {
     await updateDocument(COLLECTIONS.products, id, {
       status,
       rejectionReason: rejectionReason ?? '',
+      ...(status !== 'approved' ? { publiclyVisible: false } : {}),
       ...(status === 'approved' ? { publishedAt: Date.now() } : {}),
     })
   },
