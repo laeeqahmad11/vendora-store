@@ -6,7 +6,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { PageHeader } from '@/layouts/dashboard-layout'
 import { productsService } from '@/services/products.service'
-import { createDocument, queryDocs } from '@/services/firestore'
+import { queryDocs } from '@/services/firestore'
 import { COLLECTIONS } from '@/lib/constants'
 import { formatNumber, getErrorMessage } from '@/lib/utils'
 import type { InventoryLog, Product } from '@/types'
@@ -19,28 +19,8 @@ import { InventoryTable } from '../components/inventory/inventory-table'
 import { InventoryToolbar } from '../components/inventory/inventory-toolbar'
 import type { StockAdjustment, StockTab } from '../components/inventory/inventory.types'
 
-async function adjustStockWithLog(
-  product: Product,
-  change: number,
-  reason: StockAdjustment['reason'],
-  note: string,
-  actorId: string,
-) {
-  await productsService.adjustStock(product.id, change)
-
-  await createDocument<InventoryLog>(COLLECTIONS.inventoryLogs, {
-    storeId: product.storeId,
-    productId: product.id,
-    productName: product.name,
-    change,
-    reason,
-    note: note || undefined,
-    by: actorId,
-  } as Omit<InventoryLog, 'id' | 'createdAt'>)
-}
-
 export default function InventoryPage() {
-  const { store, actor } = useMerchant()
+  const { store } = useMerchant()
   const queryClient = useQueryClient()
 
   const [tab, setTab] = React.useState<StockTab>('all')
@@ -106,7 +86,13 @@ export default function InventoryPage() {
 
   const adjustStock = useMutation({
     mutationFn: (adjustment: StockAdjustment) =>
-      adjustStockWithLog(adjustment.product, adjustment.change, adjustment.reason, adjustment.note, actor.id),
+      productsService.adjustStock(
+        adjustment.product.id,
+        adjustment.change,
+        adjustment.reason,
+        adjustment.note,
+        adjustment.variantId,
+      ),
     onSuccess: async () => {
       toast.success('Stock updated')
       setAdjusting(null)

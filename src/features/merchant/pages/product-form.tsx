@@ -102,7 +102,12 @@ export default function ProductFormPage() {
 
         <div className="space-y-6">
           <PricingSection register={form.register} errors={form.errors} />
-          <InventorySection register={form.register} errors={form.errors} />
+          <InventorySection
+            register={form.register}
+            errors={form.errors}
+            hasVariants={form.combos.length > 0}
+            variantStockTotal={form.variantStockTotal}
+          />
           <FlashSaleSection
             register={form.register}
             setValue={form.setValue}

@@ -4,6 +4,7 @@ export interface ProductOptionRow {
 }
 
 export interface ProductVariantRowState {
+  id?: string
   price: string
   stock: string
   sku: string

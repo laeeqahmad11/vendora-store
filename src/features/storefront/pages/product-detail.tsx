@@ -668,7 +668,9 @@ export default function ProductDetailPage() {
   const availableStock =
     matchedVariant
       ? matchedVariant.stock
-      : product.stock
+      : hasOptions
+        ? 0
+        : product.stock
 
   const minQty =
     product.minOrderQty ?? 1
@@ -679,8 +681,10 @@ export default function ProductDetailPage() {
       Infinity,
   )
 
+  const selectionReady = !hasOptions || (allSelected && !!matchedVariant)
+
   const outOfStock =
-    availableStock <= 0
+    selectionReady && availableStock < minQty
 
   const wishlisted =
     inWishlist.includes(product.id)
@@ -720,6 +724,11 @@ export default function ProductDetailPage() {
       toast.error(
         'Please choose your options first.',
       )
+      return false
+    }
+
+    if (hasOptions && !matchedVariant) {
+      toast.error('This option combination is unavailable.')
       return false
     }
 
@@ -815,7 +824,11 @@ export default function ProductDetailPage() {
                 </Badge>
               )}
 
-            {outOfStock ? (
+            {!selectionReady ? (
+              <Badge variant="secondary">
+                Select options
+              </Badge>
+            ) : outOfStock ? (
               <Badge variant="secondary">
                 Out of stock
               </Badge>
@@ -918,14 +931,13 @@ export default function ProductDetailPage() {
                     <button
                       key={value}
                       type="button"
-                      onClick={() =>
-                        setSelected(
-                          (current) => ({
-                            ...current,
-                            [name]: value,
-                          }),
-                        )
-                      }
+                      onClick={() => {
+                        setSelected((current) => ({
+                          ...current,
+                          [name]: value,
+                        }))
+                        setQuantity(product.minOrderQty ?? 1)
+                      }}
                       className={cn(
                         'rounded-lg border px-3.5 py-1.5 text-sm font-medium transition-colors',
                         isActive
@@ -1034,7 +1046,7 @@ export default function ProductDetailPage() {
               <Button
                 size="lg"
                 className="col-span-1 w-full sm:w-auto sm:px-10"
-                disabled={outOfStock}
+                disabled={!selectionReady || outOfStock}
                 onClick={
                   handleAddToCart
                 }
@@ -1047,7 +1059,7 @@ export default function ProductDetailPage() {
                 size="lg"
                 variant="secondary"
                 className="w-full sm:w-auto"
-                disabled={outOfStock}
+                disabled={!selectionReady || outOfStock}
                 onClick={handleBuyNow}
               >
                 Buy now

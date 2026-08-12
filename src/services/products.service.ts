@@ -29,6 +29,22 @@ const moderateProduct = httpsCallable<
   { status: 'approved' | 'rejected' | 'archived' }
 >(functions, 'moderateProduct')
 
+const setProductInventory = httpsCallable<
+  { productId: string; stock?: number; variantStocks?: { variantId: string; stock: number }[] },
+  { productId: string; stock: number }
+>(functions, 'setProductInventory')
+
+const adjustProductStock = httpsCallable<
+  {
+    productId: string
+    variantId?: string
+    change: number
+    reason: 'restock' | 'adjustment' | 'return'
+    note?: string
+  },
+  { productId: string; variantId: string | null; stock: number }
+>(functions, 'adjustProductStock')
+
 export const PRODUCT_MODERATION_FIELDS = [
   'name',
   'description',
@@ -75,7 +91,15 @@ function valuesEqual(left: unknown, right: unknown): boolean {
 
 export function hasMaterialProductChanges(current: Product, changes: Partial<Product>): boolean {
   return PRODUCT_MODERATION_FIELDS.some(
-    (field) => changes[field] !== undefined && !valuesEqual(current[field], changes[field]),
+    (field) => {
+      if (changes[field] === undefined) return false
+      if (field === 'variants') {
+        const withoutStock = (variants: Product['variants']) =>
+          variants?.map(({ stock: _stock, ...variant }) => variant)
+        return !valuesEqual(withoutStock(current.variants), withoutStock(changes.variants))
+      }
+      return !valuesEqual(current[field], changes[field])
+    },
   )
 }
 
@@ -292,7 +316,28 @@ async getBySlug(slug: string) {
     return queryDocs<Product>(COLLECTIONS.products, where('status', '==', 'pending'), orderBy('updatedAt', 'asc'))
   },
 
-  async adjustStock(id: string, change: number) {
-    await updateDocument(COLLECTIONS.products, id, { stock: increment(change) })
+  async setInventory(
+    id: string,
+    inventory: { stock: number } | { variantStocks: { variantId: string; stock: number }[] },
+  ) {
+    return (await setProductInventory({ productId: id, ...inventory })).data
+  },
+
+  async adjustStock(
+    id: string,
+    change: number,
+    reason: 'restock' | 'adjustment' | 'return',
+    note?: string,
+    variantId?: string,
+  ) {
+    return (
+      await adjustProductStock({
+        productId: id,
+        change,
+        reason,
+        ...(note ? { note } : {}),
+        ...(variantId ? { variantId } : {}),
+      })
+    ).data
   },
 }

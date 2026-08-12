@@ -110,6 +110,13 @@ export default defineConfig({
       use: { ...sharedUse, storageState: authState('customer') },
     },
     {
+      name: 'variant-inventory',
+      testMatch: /authenticated\/variant-inventory\.spec\.ts/,
+      dependencies: ['auth-setup'],
+      metadata: { allowFirebaseEmulators: true },
+      use: { ...sharedUse, storageState: authState('customer') },
+    },
+    {
       name: 'discounts-coupons',
       testMatch: /authenticated\/discounts-coupons\.spec\.ts/,
       dependencies: ['auth-setup'],

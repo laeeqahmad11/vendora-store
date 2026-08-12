@@ -145,14 +145,14 @@ async function main() {
     P('prod-lumen-lamp', 'store-nova-tech', merchant1, 'Lumen Desk Lamp Pro', 42.0, 'cat-home', { recommended: true, soldCount: 60 }),
     P('prod-drift-mouse', 'store-nova-tech', merchant1, 'Drift Ergonomic Mouse', 27.9, 'cat-electronics', { stock: 4, soldCount: 75 }),
     P('prod-linen-shirt', 'store-atelier', merchant2, 'Breeze Linen Shirt', 48.0, 'cat-fashion', {
-      subcategoryId: 'cat-mens', brandId: 'brand-verve', featured: true, trending: true, rating: 4.4, ratingCount: 33, soldCount: 120,
+      subcategoryId: 'cat-mens', brandId: 'brand-verve', featured: true, trending: true, rating: 4.4, ratingCount: 33, soldCount: 120, stock: 96,
       variantOptions: { Size: ['S', 'M', 'L', 'XL'], Color: ['White', 'Sand', 'Navy'] },
       variants: ['S','M','L','XL'].flatMap((s) => ['White','Sand','Navy'].map((c) => ({
         id: `v-${s}-${c}`.toLowerCase(), options: { Size: s, Color: c }, stock: 8, sku: `LNS-${s}-${c[0]}`,
       }))),
     }),
     P('prod-midi-dress', 'store-atelier', merchant2, 'Solstice Midi Dress', 72.0, 'cat-fashion', {
-      subcategoryId: 'cat-womens', brandId: 'brand-verve', compareAtPrice: 95, featured: true, rating: 4.7, ratingCount: 52, soldCount: 88,
+      subcategoryId: 'cat-womens', brandId: 'brand-verve', compareAtPrice: 95, featured: true, rating: 4.7, ratingCount: 52, soldCount: 88, stock: 40,
       variantOptions: { Size: ['XS', 'S', 'M', 'L'] },
       variants: ['XS','S','M','L'].map((s) => ({ id: `v-${s}`.toLowerCase(), options: { Size: s }, stock: 10, sku: `SMD-${s}` })),
     }),

@@ -156,6 +156,23 @@ export function InventoryTable({
                             }}
                           />
                         </div>
+                        {product.variants?.length ? (
+                          <div className="space-y-1 border-t pt-2 text-xs text-muted-foreground">
+                            {product.variants.map((variant) => (
+                              <div key={variant.id} className="flex justify-between gap-3">
+                                <span
+                                  className="max-w-[150px] truncate"
+                                  title={Object.values(variant.options).join(' / ')}
+                                >
+                                  {Object.values(variant.options).join(' / ')}
+                                </span>
+                                <span className="font-medium tabular-nums text-foreground">
+                                  {formatNumber(variant.stock)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     </TableCell>
 

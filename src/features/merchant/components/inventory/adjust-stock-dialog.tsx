@@ -29,6 +29,7 @@ export function AdjustStockDialog({ product, isPending, onOpenChange, onAdjust }
   const [quantity, setQuantity] = React.useState('1')
   const [reason, setReason] = React.useState<AdjustReason>('restock')
   const [note, setNote] = React.useState('')
+  const [variantId, setVariantId] = React.useState('')
 
   React.useEffect(() => {
     if (product) {
@@ -36,6 +37,7 @@ export function AdjustStockDialog({ product, isPending, onOpenChange, onAdjust }
       setQuantity('1')
       setReason('restock')
       setNote('')
+      setVariantId(product.variants?.[0]?.id ?? '')
     }
   }, [product])
 
@@ -50,13 +52,19 @@ export function AdjustStockDialog({ product, isPending, onOpenChange, onAdjust }
       }
 
       const change = direction === 'remove' ? -qty : qty
+      const selectedVariant = product.variants?.find((variant) => variant.id === variantId)
 
-      if (product.stock + change < 0) {
+      if ((product.variants?.length ?? 0) > 0 && !selectedVariant) {
+        throw new Error('Choose a variant to adjust.')
+      }
+
+      if ((selectedVariant?.stock ?? product.stock) + change < 0) {
         throw new Error('Stock cannot go below zero.')
       }
 
       onAdjust({
         product,
+        ...(selectedVariant ? { variantId: selectedVariant.id } : {}),
         change,
         reason,
         note: note.trim(),
@@ -78,6 +86,22 @@ export function AdjustStockDialog({ product, isPending, onOpenChange, onAdjust }
         </DialogHeader>
 
         <div className="space-y-4">
+          {(product?.variants?.length ?? 0) > 0 && (
+            <FormField label="Variant" required>
+              <Select value={variantId} onValueChange={setVariantId}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Choose a variant" />
+                </SelectTrigger>
+                <SelectContent>
+                  {product?.variants?.map((variant) => (
+                    <SelectItem key={variant.id} value={variant.id}>
+                      {Object.values(variant.options).join(' / ')} ({formatNumber(variant.stock)} units)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+          )}
           <div className="grid grid-cols-1 gap-2 xs:grid-cols-2 sm:grid-cols-2">
             <Button
               type="button"

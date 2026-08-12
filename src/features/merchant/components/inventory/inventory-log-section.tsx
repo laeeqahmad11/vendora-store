@@ -69,6 +69,11 @@ export function InventoryLogSection({ logs, isLoading, isError, onRetry }: Inven
                       <p className="truncate font-semibold" title={log.productName}>
                         {log.productName}
                       </p>
+                      {log.variant && (
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {Object.values(log.variant).join(' / ')}{log.sku ? ` · ${log.sku}` : ''}
+                        </p>
+                      )}
 
                       <div className="mt-1 flex flex-wrap items-center gap-2">
                         <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">

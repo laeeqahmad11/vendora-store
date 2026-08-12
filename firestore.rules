@@ -457,6 +457,13 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time
         && merchantProductFieldsOnly()
         && aggregateFieldsUnchanged()
+        // Approved variant products use trusted Functions for all inventory
+        // writes so top-level stock cannot diverge from the variant sum.
+        && (resource.data.status != 'approved'
+          || !(resource.data.get('variants', []) is list)
+          || resource.data.get('variants', []).size() == 0
+          || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['stock'])
+          || request.resource.data.status == 'pending')
         && validMerchantProductStateTransition();
     }
 
@@ -1093,10 +1100,8 @@ service cloud.firestore {
     match /inventoryLogs/{id} {
       allow read: if isAdmin()
         || (signedIn() && ownsStore(resource.data.storeId));
-      allow create: if isActiveUser()
-        && (isAdmin() || ownsStore(request.resource.data.storeId))
-        && request.resource.data.by == request.auth.uid;
-      allow update, delete: if false;
+      // Inventory logs are coupled transactionally to trusted stock writes.
+      allow create, update, delete: if false;
     }
 
     // ---------------------------------------------------------- newsletter

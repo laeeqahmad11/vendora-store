@@ -81,7 +81,10 @@ export function VariantsSection({
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => setOptionRows((rows) => [...rows, { name: '', values: '' }])}
+          onClick={() => {
+            setOptionRows((rows) => [...rows, { name: '', values: '' }])
+            markDirty()
+          }}
         >
           <Plus /> Add option
         </Button>
@@ -127,8 +130,9 @@ export function VariantsSection({
                       <td className="p-2.5">
                         <Input
                           type="number"
+                          step="1"
                           min="0"
-                          placeholder="Base stock"
+                          placeholder="0"
                           className="h-8 w-24"
                           value={edit.stock}
                           onChange={(event) => setEdit({ stock: event.target.value })}

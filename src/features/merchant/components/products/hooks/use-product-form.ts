@@ -16,7 +16,12 @@ import type {
   ProductSpecification,
   ProductVariantRowState,
 } from '../product-form.types'
-import { buildProductVariantCombos, parseProductOptions, productVariantComboKey } from '../product-form.utils'
+import {
+  buildProductVariantCombos,
+  parseProductOptions,
+  productVariantComboKey,
+  productVariantId,
+} from '../product-form.utils'
 
 export function useProductForm() {
   const { store, actor } = useMerchant()
@@ -109,6 +114,7 @@ export function useProductForm() {
     const edits: Record<string, ProductVariantRowState> = {}
     for (const variant of product.variants ?? []) {
       edits[productVariantComboKey(variant.options)] = {
+        id: variant.id,
         price: variant.price != null ? String(variant.price) : '',
         stock: String(variant.stock),
         sku: variant.sku ?? '',
@@ -131,18 +137,31 @@ export function useProductForm() {
 
   const variantOptions = React.useMemo(() => parseProductOptions(optionRows), [optionRows])
   const combos = React.useMemo(() => buildProductVariantCombos(variantOptions), [variantOptions])
+  const variantStockTotal = React.useMemo(
+    () =>
+      combos.reduce((total, combo) => {
+        const value = variantEdits[productVariantComboKey(combo)]?.stock
+        const stock = value === undefined || value === '' ? 0 : Number(value)
+        return total + (Number.isInteger(stock) && stock >= 0 ? stock : 0)
+      }, 0),
+    [combos, variantEdits],
+  )
 
-  const buildVariants = (baseStock: number): ProductVariant[] =>
+  React.useEffect(() => {
+    if (combos.length) setValue('stock', variantStockTotal, { shouldValidate: true })
+  }, [combos.length, setValue, variantStockTotal])
+
+  const buildVariants = (): ProductVariant[] =>
     combos.map((combo) => {
       const key = productVariantComboKey(combo)
       const edit = variantEdits[key]
       const price = edit?.price ? Number(edit.price) : undefined
-      const stock = edit?.stock ? Number(edit.stock) : baseStock
+      const stock = edit?.stock === undefined || edit.stock === '' ? 0 : Number(edit.stock)
       return {
-        id: key.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase() || 'default',
+        id: edit?.id ?? productVariantId(combo),
         options: combo,
         ...(price != null && Number.isFinite(price) ? { price } : {}),
-        stock: Number.isFinite(stock) ? Math.max(0, Math.round(stock)) : Math.max(0, baseStock),
+        stock,
         ...(edit?.sku ? { sku: edit.sku } : {}),
       }
     })
@@ -152,7 +171,14 @@ export function useProductForm() {
       toast.error('Add at least one product image.')
       return
     }
-    const variants = buildVariants(values.stock)
+    const variants = buildVariants()
+    if (variants.some((variant) => !Number.isSafeInteger(variant.stock) || variant.stock < 0)) {
+      toast.error('Every variant stock must be a non-negative whole number.')
+      return
+    }
+    const authoritativeStock = variants.length
+      ? variants.reduce((total, variant) => total + variant.stock, 0)
+      : values.stock
     const specifications = specs.filter((spec) => spec.label.trim() && spec.value.trim())
     const flashSale =
       values.flashSaleActive && values.flashSalePrice && values.flashSaleEndsAt
@@ -176,7 +202,7 @@ export function useProductForm() {
       currency: 'USD',
       sku: values.sku || undefined,
       barcode: values.barcode || undefined,
-      stock: values.stock,
+      stock: authoritativeStock,
       lowStockThreshold: values.lowStockThreshold,
       minOrderQty: values.minOrderQty,
       maxOrderQty: values.maxOrderQty,
@@ -207,13 +233,38 @@ export function useProductForm() {
         const requiresReapproval =
           productQ.data.status === 'approved' && hasMaterialProductChanges(productQ.data, payload)
         const status = submitForReview || requiresReapproval ? 'pending' : productQ.data.status
-        await productsService.update(productQ.data.id, {
-          ...payload,
-          status,
-          ...((submitForReview || requiresReapproval)
-            ? { publiclyVisible: false, rejectionReason: '' }
-            : {}),
-        } as Partial<Product>)
+        if (productQ.data.status === 'approved' && !requiresReapproval && !submitForReview) {
+          const { stock: _stock, variants: _variants, ...nonInventoryPayload } = payload
+          await productsService.update(productQ.data.id, {
+            ...nonInventoryPayload,
+            status,
+          } as Partial<Product>)
+          const inventoryChanged =
+            productQ.data.stock !== authoritativeStock ||
+            (variants.length > 0
+              ? variants.some(
+                  (variant) =>
+                    productQ.data?.variants?.find((current) => current.id === variant.id)?.stock !==
+                    variant.stock,
+                )
+              : false)
+          if (inventoryChanged) {
+            await productsService.setInventory(
+              productQ.data.id,
+              variants.length
+                ? { variantStocks: variants.map((variant) => ({ variantId: variant.id, stock: variant.stock })) }
+                : { stock: authoritativeStock },
+            )
+          }
+        } else {
+          await productsService.update(productQ.data.id, {
+            ...payload,
+            status,
+            ...((submitForReview || requiresReapproval)
+              ? { publiclyVisible: false, rejectionReason: '' }
+              : {}),
+          } as Partial<Product>)
+        }
         toast.success(
           requiresReapproval
             ? 'Material changes saved and sent for reapproval'
@@ -280,6 +331,7 @@ export function useProductForm() {
     variantEdits,
     setVariantEdits,
     combos,
+    variantStockTotal,
     specs,
     setSpecs,
     markDirty,

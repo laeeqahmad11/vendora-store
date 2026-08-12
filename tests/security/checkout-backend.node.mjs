@@ -15,8 +15,6 @@ const AUTH_PORT = 9099
 const FIRESTORE_PORT = 8080
 const FUNCTIONS_PORT = 5001
 const PASSWORD = 'VendoraCheckout!123'
-const callableUrl = `http://${HOST}:${FUNCTIONS_PORT}/${PROJECT_ID}/us-central1/placeOrders`
-
 if (
   PROJECT_ID !== 'demo-vendora-e2e' ||
   HOST !== '127.0.0.1' ||
@@ -109,7 +107,11 @@ async function createClient(uid, email) {
 }
 
 async function invokeCheckout(data, token) {
-  const response = await fetch(callableUrl, {
+  return invokeCallable('placeOrders', data, token)
+}
+
+async function invokeCallable(functionName, data, token) {
+  const response = await fetch(`http://${HOST}:${FUNCTIONS_PORT}/${PROJECT_ID}/us-central1/${functionName}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -145,6 +147,7 @@ async function seed() {
     ['checkout-customer-suspended', 'checkout-suspended@example.test', 'customer'],
     ['checkout-merchant-1', 'checkout-merchant-1@example.test', 'merchant'],
     ['checkout-merchant-2', 'checkout-merchant-2@example.test', 'merchant'],
+    ['checkout-merchant-suspended', 'checkout-merchant-suspended@example.test', 'merchant'],
   ]
   for (const [uid, email] of users) {
     await adminAuth.createUser({ uid, email, password: PASSWORD })
@@ -152,7 +155,9 @@ async function seed() {
       email,
       displayName: uid,
       role: users.find((entry) => entry[0] === uid)[2],
-      ...(uid === 'checkout-customer-suspended' ? { suspended: true } : {}),
+      ...(uid === 'checkout-customer-suspended' || uid === 'checkout-merchant-suspended'
+        ? { suspended: true }
+        : {}),
     })
   }
 
@@ -181,6 +186,12 @@ async function seed() {
       shippingFee: 0,
       freeShippingThreshold: 0,
     }),
+    adminDb.doc('stores/checkout-store-suspended-merchant').set({
+      ownerId: 'checkout-merchant-suspended',
+      name: 'Suspended Merchant Store',
+      status: 'approved',
+      shippingEnabled: false,
+    }),
   ])
 
   const products = [
@@ -204,6 +215,55 @@ async function seed() {
     ['per-customer', product('per-customer', { price: 100, stock: 5 })],
     ['stale-coupon', product('stale-coupon', { price: 100, stock: 5 })],
     ['multi-one', product('multi-one', { price: 200, stock: 5 })],
+    ['variant-buy', product('variant-buy', {
+      price: 100,
+      stock: 5,
+      maxOrderQty: 10,
+      variantOptions: { Color: ['Red', 'Blue'] },
+      variants: [
+        { id: 'red', options: { Color: 'Red' }, price: 150, stock: 2, sku: 'VAR-RED' },
+        { id: 'blue', options: { Color: 'Blue' }, price: 175, stock: 3, sku: 'VAR-BLUE' },
+      ],
+    })],
+    ['variant-out', product('variant-out', {
+      stock: 5,
+      maxOrderQty: 10,
+      variantOptions: { Size: ['Out', 'In'] },
+      variants: [
+        { id: 'out', options: { Size: 'Out' }, stock: 0 },
+        { id: 'in', options: { Size: 'In' }, stock: 5 },
+      ],
+    })],
+    ['variant-repeat', product('variant-repeat', {
+      stock: 3,
+      maxOrderQty: 10,
+      variantOptions: { Size: ['Only'] },
+      variants: [{ id: 'only', options: { Size: 'Only' }, stock: 3 }],
+    })],
+    ['variant-multi', product('variant-multi', {
+      stock: 7,
+      maxOrderQty: 10,
+      variantOptions: { Size: ['A', 'B'] },
+      variants: [
+        { id: 'a', options: { Size: 'A' }, stock: 2 },
+        { id: 'b', options: { Size: 'B' }, stock: 5 },
+      ],
+    })],
+    ['variant-atomic', product('variant-atomic', {
+      stock: 4,
+      maxOrderQty: 10,
+      variantOptions: { Size: ['A'] },
+      variants: [{ id: 'a', options: { Size: 'A' }, stock: 4 }],
+    })],
+    ['variant-cancel', product('variant-cancel', {
+      stock: 6,
+      maxOrderQty: 10,
+      variantOptions: { Size: ['A', 'B'] },
+      variants: [
+        { id: 'a', options: { Size: 'A' }, stock: 2, sku: 'CANCEL-A' },
+        { id: 'b', options: { Size: 'B' }, stock: 4, sku: 'CANCEL-B' },
+      ],
+    })],
     [
       'multi-two',
       product('multi-two', {
@@ -228,6 +288,8 @@ async function seed() {
 let customerOne
 let customerTwo
 let merchantOne
+let merchantTwo
+let suspendedMerchant
 let suspendedCustomer
 
 before(async () => {
@@ -235,6 +297,11 @@ before(async () => {
   customerOne = await createClient('checkout-customer-1', 'checkout-customer-1@example.test')
   customerTwo = await createClient('checkout-customer-2', 'checkout-customer-2@example.test')
   merchantOne = await createClient('checkout-merchant-1', 'checkout-merchant-1@example.test')
+  merchantTwo = await createClient('checkout-merchant-2', 'checkout-merchant-2@example.test')
+  suspendedMerchant = await createClient(
+    'checkout-merchant-suspended',
+    'checkout-merchant-suspended@example.test',
+  )
   suspendedCustomer = await createClient('checkout-customer-suspended', 'checkout-suspended@example.test')
 })
 
@@ -619,6 +686,170 @@ test('multi-store checkout creates separate orders with exact shared allocation'
     { subtotal: 80, discount: 8.57, shipping: 5, total: 76.43 },
   )
   assert.equal((await adminDb.doc('coupons/multi-cap').get()).get('usedCount'), 1)
+})
+
+test('variant checkout uses authoritative identity, price, stock, SKU, options, and aggregate stock', async () => {
+  const result = await invokeCheckout(
+    intent(
+      [{ productId: 'variant-buy', variantId: 'red', quantity: 2, price: 0.01, stock: 999 }],
+      'variant-authority-1',
+    ),
+    customerOne.token,
+  )
+  const productAfter = (await adminDb.doc('products/variant-buy').get()).data()
+  assert.equal(productAfter.stock, 3)
+  assert.equal(productAfter.soldCount, 2)
+  assert.equal(productAfter.variants.find((variant) => variant.id === 'red').stock, 0)
+  assert.equal(productAfter.variants.find((variant) => variant.id === 'blue').stock, 3)
+
+  const orderAfter = (await adminDb.doc(`orders/${result.orderIds[0]}`).get()).data()
+  assert.deepEqual(
+    {
+      price: orderAfter.items[0].price,
+      variantId: orderAfter.items[0].variantId,
+      variant: orderAfter.items[0].variant,
+      sku: orderAfter.items[0].sku,
+      inventoryAuthority: orderAfter.items[0].inventoryAuthority,
+    },
+    {
+      price: 150,
+      variantId: 'red',
+      variant: { Color: 'Red' },
+      sku: 'VAR-RED',
+      inventoryAuthority: 'variant',
+    },
+  )
+})
+
+test('out-of-stock, missing, nonexistent, and stale variant selections are rejected', async () => {
+  for (const [items, key] of [
+    [[{ productId: 'variant-out', variantId: 'out', quantity: 1 }], 'variant-out-1'],
+    [[{ productId: 'variant-out', variantId: 'missing', quantity: 1 }], 'variant-missing-1'],
+    [[{ productId: 'variant-out', quantity: 1 }], 'variant-required-1'],
+  ]) {
+    await expectCheckoutError(
+      invokeCheckout(intent(items, key), customerOne.token),
+      'FAILED_PRECONDITION',
+      /unavailable|stock changed/i,
+    )
+  }
+  const productAfter = (await adminDb.doc('products/variant-out').get()).data()
+  assert.equal(productAfter.stock, 5)
+  assert.deepEqual(productAfter.variants.map((variant) => variant.stock), [0, 5])
+  assert.equal(productAfter.soldCount, 0)
+})
+
+test('same-variant quantities aggregate before validation and two variants deduct independently', async () => {
+  await expectCheckoutError(
+    invokeCheckout(
+      intent([
+        { productId: 'variant-repeat', variantId: 'only', quantity: 2 },
+        { productId: 'variant-repeat', variantId: 'only', quantity: 2 },
+      ], 'variant-repeat-fail-1'),
+      customerOne.token,
+    ),
+    'FAILED_PRECONDITION',
+    /unavailable|stock changed/i,
+  )
+  assert.equal((await adminDb.doc('products/variant-repeat').get()).get('stock'), 3)
+
+  await invokeCheckout(
+    intent([
+      { productId: 'variant-multi', variantId: 'a', quantity: 2 },
+      { productId: 'variant-multi', variantId: 'b', quantity: 3 },
+    ], 'variant-multi-success-1'),
+    customerOne.token,
+  )
+  const productAfter = (await adminDb.doc('products/variant-multi').get()).data()
+  assert.equal(productAfter.stock, 2)
+  assert.equal(productAfter.soldCount, 5)
+  assert.deepEqual(productAfter.variants.map((variant) => variant.stock), [0, 2])
+})
+
+test('variant multi-item failure commits no inventory, order, or sold-count changes', async () => {
+  const ordersBefore = (await adminDb.collection('orders').get()).size
+  await expectCheckoutError(
+    invokeCheckout(
+      intent([
+        { productId: 'variant-atomic', variantId: 'a', quantity: 2 },
+        { productId: 'atomic-bad', quantity: 1 },
+      ], 'variant-atomic-failure-1'),
+      customerOne.token,
+    ),
+    'FAILED_PRECONDITION',
+    /unavailable|stock changed/i,
+  )
+  const variantAfter = (await adminDb.doc('products/variant-atomic').get()).data()
+  assert.equal(variantAfter.stock, 4)
+  assert.equal(variantAfter.variants[0].stock, 4)
+  assert.equal(variantAfter.soldCount, 0)
+  assert.equal((await adminDb.collection('orders').get()).size, ordersBefore)
+})
+
+test('cancellation restores the exact variant once and preserves the aggregate', async () => {
+  const checkout = await invokeCheckout(
+    intent([{ productId: 'variant-cancel', variantId: 'a', quantity: 1 }], 'variant-cancel-1'),
+    customerOne.token,
+  )
+  const orderId = checkout.orderIds[0]
+  let productAfter = (await adminDb.doc('products/variant-cancel').get()).data()
+  assert.deepEqual(productAfter.variants.map((variant) => variant.stock), [1, 4])
+  assert.equal(productAfter.stock, 5)
+  assert.equal(productAfter.soldCount, 1)
+
+  await invokeCallable(
+    'cancelOrder',
+    { orderId, reason: 'Variant cancellation regression' },
+    customerOne.token,
+  )
+  productAfter = (await adminDb.doc('products/variant-cancel').get()).data()
+  assert.deepEqual(productAfter.variants.map((variant) => variant.stock), [2, 4])
+  assert.equal(productAfter.stock, 6)
+  assert.equal(productAfter.soldCount, 0)
+
+  await expectCheckoutError(
+    invokeCallable('cancelOrder', { orderId, reason: 'Duplicate cancellation' }, customerOne.token),
+    'FAILED_PRECONDITION',
+    /pending or confirmed/i,
+  )
+  productAfter = (await adminDb.doc('products/variant-cancel').get()).data()
+  assert.deepEqual(productAfter.variants.map((variant) => variant.stock), [2, 4])
+  assert.equal(productAfter.stock, 6)
+  assert.equal(productAfter.soldCount, 0)
+})
+
+test('trusted variant adjustments preserve the aggregate and reject direct, cross-store, and suspended writes', async () => {
+  const reference = await adminDb.doc('products/variant-out').get()
+  const forgedVariants = reference.data().variants.map((variant) => ({ ...variant, stock: 99 }))
+  await assert.rejects(updateDoc(doc(customerOne.firestore, 'products/variant-out'), { variants: forgedVariants }))
+  await assert.rejects(updateDoc(doc(merchantOne.firestore, 'products/variant-out'), {
+    stock: 198,
+    variants: forgedVariants,
+  }))
+  await assert.rejects(updateDoc(doc(merchantTwo.firestore, 'products/variant-out'), { stock: 6 }))
+  await assert.rejects(updateDoc(doc(suspendedMerchant.firestore, 'products/variant-out'), { stock: 6 }))
+
+  await invokeCallable('adjustProductStock', {
+    productId: 'variant-out', variantId: 'out', change: 2, reason: 'restock', note: 'Variant restock',
+  }, merchantOne.token)
+  const adjusted = (await adminDb.doc('products/variant-out').get()).data()
+  assert.deepEqual(adjusted.variants.map((variant) => variant.stock), [2, 5])
+  assert.equal(adjusted.stock, 7)
+
+  await expectCheckoutError(
+    invokeCallable('adjustProductStock', {
+      productId: 'variant-out', variantId: 'out', change: 1, reason: 'restock',
+    }, merchantTwo.token),
+    'PERMISSION_DENIED',
+    /cannot manage/i,
+  )
+  await expectCheckoutError(
+    invokeCallable('adjustProductStock', {
+      productId: 'variant-out', variantId: 'out', change: 1, reason: 'restock',
+    }, suspendedMerchant.token),
+    'PERMISSION_DENIED',
+    /active merchant/i,
+  )
 })
 
 test('customer Firestore writes cannot create orders or mutate financial authority', async () => {

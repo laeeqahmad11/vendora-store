@@ -14,6 +14,7 @@ db.settings({ ignoreUndefinedProperties: true })
 const REGION = process.env.VENDORA_FUNCTION_REGION || 'us-central1'
 const MAX_ITEMS = 50
 const MAX_ITEM_QUANTITY = 1_000
+const MAX_PRODUCT_VARIANTS = 500
 const MAX_CHECKOUT_PAYLOAD_BYTES = 64 * 1024
 const IDEMPOTENCY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000
 const ORDER_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -312,6 +313,12 @@ export const moderateProduct = onCall(
       if (typeof data.merchantId !== 'string' || !data.merchantId) {
         fail('failed-precondition', 'Product merchant ownership is invalid.')
       }
+      if (status === 'approved') {
+        authoritativeProductInventory(
+          data,
+          'Product inventory is invalid. Correct its stock and variants before approval.',
+        )
+      }
 
       transaction.update(product.ref, {
         status,
@@ -355,6 +362,61 @@ function cleanIdentifier(value, field, minimum = 1, maximum = 128) {
     fail('invalid-argument', `${field} is invalid.`)
   }
   return clean
+}
+
+function authoritativeProductInventory(product, message = productUnavailableMessage) {
+  const variants = product.variants
+  if (variants === undefined || variants === null || (Array.isArray(variants) && variants.length === 0)) {
+    if (!Number.isSafeInteger(product.stock) || product.stock < 0) {
+      fail('failed-precondition', message)
+    }
+    return { hasVariants: false, stock: product.stock, variants: [], byId: new Map() }
+  }
+  if (!Array.isArray(variants) || variants.length > MAX_PRODUCT_VARIANTS) {
+    fail('failed-precondition', message)
+  }
+
+  const byId = new Map()
+  const combinations = new Set()
+  let stock = 0
+  for (const variant of variants) {
+    if (
+      !isObject(variant) ||
+      typeof variant.id !== 'string' ||
+      !variant.id ||
+      variant.id.length > 128 ||
+      variant.id.includes('/') ||
+      containsControlCharacter(variant.id) ||
+      byId.has(variant.id) ||
+      !isObject(variant.options) ||
+      Object.keys(variant.options).length === 0 ||
+      !Number.isSafeInteger(variant.stock) ||
+      variant.stock < 0
+    ) {
+      fail('failed-precondition', message)
+    }
+    const optionEntries = Object.entries(variant.options).sort(([left], [right]) => left.localeCompare(right))
+    if (
+      optionEntries.some(
+        ([name, value]) =>
+          !name.trim() ||
+          typeof value !== 'string' ||
+          !value.trim() ||
+          containsControlCharacter(name) ||
+          containsControlCharacter(value),
+      )
+    ) {
+      fail('failed-precondition', message)
+    }
+    const combination = JSON.stringify(optionEntries)
+    if (combinations.has(combination)) fail('failed-precondition', message)
+    combinations.add(combination)
+    byId.set(variant.id, variant)
+    stock += variant.stock
+    if (!Number.isSafeInteger(stock)) fail('failed-precondition', message)
+  }
+  if (product.stock !== stock) fail('failed-precondition', message)
+  return { hasVariants: true, stock, variants, byId }
 }
 
 function containsControlCharacter(value) {
@@ -420,6 +482,185 @@ function safeCallableError(error, internalMessage, conflictMessage) {
   }
   return new HttpsError('internal', internalMessage)
 }
+
+async function inventoryActorContext(transaction, uid, productRef) {
+  const [userSnapshot, productSnapshot] = await Promise.all([
+    transaction.get(db.doc(`users/${uid}`)),
+    transaction.get(productRef),
+  ])
+  if (!userSnapshot.exists || userSnapshot.get('suspended') === true) {
+    fail('permission-denied', 'Active merchant access is required.')
+  }
+  if (!productSnapshot.exists) fail('not-found', 'Product was not found.')
+  const user = userSnapshot.data()
+  const product = { id: productSnapshot.id, ...productSnapshot.data() }
+  if (user.role === 'admin') return { user, product, productRef }
+  if (user.role !== 'merchant' || product.merchantId !== uid || !product.storeId) {
+    fail('permission-denied', 'You cannot manage this product inventory.')
+  }
+  const storeSnapshot = await transaction.get(db.doc(`stores/${product.storeId}`))
+  if (
+    !storeSnapshot.exists ||
+    storeSnapshot.get('ownerId') !== uid ||
+    storeSnapshot.get('status') !== 'approved'
+  ) {
+    fail('permission-denied', 'You cannot manage this product inventory.')
+  }
+  return { user, product, productRef }
+}
+
+function appendInventoryLog(transaction, { uid, product, change, reason, note, variant }) {
+  transaction.set(db.collection('inventoryLogs').doc(), {
+    storeId: product.storeId,
+    productId: product.id,
+    productName: product.name,
+    change,
+    reason,
+    ...(note ? { note } : {}),
+    ...(variant
+      ? { variantId: variant.id, variant: variant.options, sku: variant.sku ?? null }
+      : {}),
+    by: uid,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  })
+}
+
+export const setProductInventory = onCall(checkoutOptions(), async (request) => {
+  const uid = request.auth?.uid
+  if (!uid) fail('unauthenticated', 'Sign in to update inventory.')
+  assertPayloadSize(request.data, 64 * 1024, 'Inventory request is too large.')
+  if (!isObject(request.data)) fail('invalid-argument', 'Inventory request is invalid.')
+  const productId = cleanIdentifier(request.data.productId, 'Product')
+  const productRef = db.doc(`products/${productId}`)
+
+  return db.runTransaction(async (transaction) => {
+    const context = await inventoryActorContext(transaction, uid, productRef)
+    const inventory = authoritativeProductInventory(
+      context.product,
+      'Product inventory must be repaired before it can be updated.',
+    )
+    let nextStock
+    let nextVariants
+    if (inventory.hasVariants) {
+      if (
+        !Array.isArray(request.data.variantStocks) ||
+        request.data.variantStocks.length !== inventory.variants.length
+      ) {
+        fail('invalid-argument', 'Every product variant needs an inventory value.')
+      }
+      const requested = new Map()
+      for (const entry of request.data.variantStocks) {
+        if (!isObject(entry)) fail('invalid-argument', 'Variant inventory is invalid.')
+        const variantId = cleanIdentifier(entry.variantId, 'Variant')
+        if (
+          requested.has(variantId) ||
+          !inventory.byId.has(variantId) ||
+          !Number.isSafeInteger(entry.stock) ||
+          entry.stock < 0
+        ) {
+          fail('invalid-argument', 'Variant inventory is invalid.')
+        }
+        requested.set(variantId, entry.stock)
+      }
+      nextVariants = inventory.variants.map((variant) => ({
+        ...variant,
+        stock: requested.get(variant.id),
+      }))
+      nextStock = nextVariants.reduce((sum, variant) => sum + variant.stock, 0)
+    } else {
+      if (!Number.isSafeInteger(request.data.stock) || request.data.stock < 0) {
+        fail('invalid-argument', 'Stock must be a non-negative integer.')
+      }
+      if (request.data.variantStocks !== undefined) {
+        fail('invalid-argument', 'This product does not have variants.')
+      }
+      nextStock = request.data.stock
+    }
+
+    transaction.update(productRef, {
+      stock: nextStock,
+      ...(nextVariants ? { variants: nextVariants } : {}),
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    const change = nextStock - inventory.stock
+    if (change !== 0) {
+      appendInventoryLog(transaction, {
+        uid,
+        product: context.product,
+        change,
+        reason: 'adjustment',
+        note: 'Inventory updated from the product form.',
+      })
+    }
+    return { productId, stock: nextStock, variants: nextVariants ?? null }
+  })
+})
+
+export const adjustProductStock = onCall(checkoutOptions(), async (request) => {
+  const uid = request.auth?.uid
+  if (!uid) fail('unauthenticated', 'Sign in to adjust inventory.')
+  assertPayloadSize(request.data, 16 * 1024, 'Inventory request is too large.')
+  if (!isObject(request.data)) fail('invalid-argument', 'Inventory request is invalid.')
+  const productId = cleanIdentifier(request.data.productId, 'Product')
+  const variantId =
+    request.data.variantId === undefined || request.data.variantId === null || request.data.variantId === ''
+      ? undefined
+      : cleanIdentifier(request.data.variantId, 'Variant')
+  const change = request.data.change
+  if (!Number.isSafeInteger(change) || change === 0 || Math.abs(change) > 1_000_000) {
+    fail('invalid-argument', 'Inventory adjustment is invalid.')
+  }
+  if (!['restock', 'adjustment', 'return'].includes(request.data.reason)) {
+    fail('invalid-argument', 'Inventory adjustment reason is invalid.')
+  }
+  const note = cleanString(request.data.note, 'Inventory note', 1, 1000, { optional: true })
+  const productRef = db.doc(`products/${productId}`)
+
+  return db.runTransaction(async (transaction) => {
+    const context = await inventoryActorContext(transaction, uid, productRef)
+    const inventory = authoritativeProductInventory(
+      context.product,
+      'Product inventory must be repaired before it can be adjusted.',
+    )
+    let nextStock
+    let nextVariants
+    let selectedVariant
+    if (inventory.hasVariants) {
+      if (!variantId) fail('invalid-argument', 'Choose a product variant to adjust.')
+      selectedVariant = inventory.byId.get(variantId)
+      if (!selectedVariant) fail('failed-precondition', 'The selected variant is unavailable.')
+      const selectedStock = selectedVariant.stock + change
+      if (!Number.isSafeInteger(selectedStock) || selectedStock < 0) {
+        fail('failed-precondition', 'Stock cannot go below zero.')
+      }
+      nextVariants = inventory.variants.map((variant) =>
+        variant.id === variantId ? { ...variant, stock: selectedStock } : variant,
+      )
+      nextStock = inventory.stock + change
+    } else {
+      if (variantId) fail('invalid-argument', 'This product does not have variants.')
+      nextStock = inventory.stock + change
+      if (!Number.isSafeInteger(nextStock) || nextStock < 0) {
+        fail('failed-precondition', 'Stock cannot go below zero.')
+      }
+    }
+    transaction.update(productRef, {
+      stock: nextStock,
+      ...(nextVariants ? { variants: nextVariants } : {}),
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+    appendInventoryLog(transaction, {
+      uid,
+      product: context.product,
+      change,
+      reason: request.data.reason,
+      note,
+      variant: selectedVariant,
+    })
+    return { productId, variantId: variantId ?? null, stock: nextStock }
+  })
+})
 
 function money(value) {
   return Math.round((value + Number.EPSILON) * 100) / 100
@@ -674,12 +915,31 @@ export const placeOrders = onCall(checkoutOptions(), async (request) => {
 
       const now = Date.now()
       const requestedByProduct = new Map()
+      const requestedByVariant = new Map()
+      const inventories = new Map()
       const authoritativeItems = intent.items.map((item) => {
         const product = products.get(item.productId)
         if (!product || product.status !== 'approved' || product.publiclyVisible !== true) {
           fail('failed-precondition', productUnavailableMessage)
         }
+        const inventory = inventories.get(item.productId) ?? authoritativeProductInventory(product)
+        inventories.set(item.productId, inventory)
+        if (inventory.hasVariants && !item.variantId) {
+          fail('failed-precondition', productUnavailableMessage)
+        }
+        if (!inventory.hasVariants && item.variantId) {
+          fail('failed-precondition', productUnavailableMessage)
+        }
+        const selectedVariant = item.variantId ? inventory.byId.get(item.variantId) : undefined
+        if (item.variantId && !selectedVariant) fail('failed-precondition', productUnavailableMessage)
         requestedByProduct.set(item.productId, (requestedByProduct.get(item.productId) ?? 0) + item.quantity)
+        if (selectedVariant) {
+          const inventoryKey = `${item.productId}\u0000${selectedVariant.id}`
+          requestedByVariant.set(
+            inventoryKey,
+            (requestedByVariant.get(inventoryKey) ?? 0) + item.quantity,
+          )
+        }
         const { price, variant } = currentPrice(product, item.variantId, now)
         return {
           productId: item.productId,
@@ -692,6 +952,7 @@ export const placeOrders = onCall(checkoutOptions(), async (request) => {
           variantId: item.variantId,
           variant: variant?.options,
           sku: variant?.sku ?? product.sku,
+          inventoryAuthority: variant ? 'variant' : 'product',
         }
       })
 
@@ -704,11 +965,23 @@ export const placeOrders = onCall(checkoutOptions(), async (request) => {
         if (
           requestedQuantity < minimum ||
           requestedQuantity > maximum ||
-          !Number.isSafeInteger(product.stock) ||
-          product.stock < requestedQuantity ||
           !Number.isSafeInteger(product.soldCount) ||
           product.soldCount < 0
         ) {
+          fail('failed-precondition', productUnavailableMessage)
+        }
+        const inventory = inventories.get(productId)
+        if (!inventory.hasVariants && inventory.stock < requestedQuantity) {
+          fail('failed-precondition', productUnavailableMessage)
+        }
+      }
+
+      for (const [inventoryKey, requestedQuantity] of requestedByVariant) {
+        const separator = inventoryKey.indexOf('\u0000')
+        const productId = inventoryKey.slice(0, separator)
+        const variantId = inventoryKey.slice(separator + 1)
+        const variant = inventories.get(productId)?.byId.get(variantId)
+        if (!variant || variant.stock < requestedQuantity) {
           fail('failed-precondition', productUnavailableMessage)
         }
       }
@@ -870,8 +1143,16 @@ export const placeOrders = onCall(checkoutOptions(), async (request) => {
 
       for (const [productId, requestedQuantity] of requestedByProduct) {
         const product = products.get(productId)
+        const inventory = inventories.get(productId)
+        const variants = inventory.hasVariants
+          ? inventory.variants.map((variant) => {
+              const requested = requestedByVariant.get(`${productId}\u0000${variant.id}`) ?? 0
+              return requested ? { ...variant, stock: variant.stock - requested } : variant
+            })
+          : undefined
         transaction.update(db.doc(`products/${productId}`), {
           stock: product.stock - requestedQuantity,
+          ...(variants ? { variants } : {}),
           soldCount: product.soldCount + requestedQuantity,
           updatedAt: FieldValue.serverTimestamp(),
         })
@@ -1225,11 +1506,27 @@ export const cancelOrder = onCall(checkoutOptions(), async (request) => {
       }
 
       const quantities = new Map()
+      const variantQuantities = new Map()
+      const productPoolQuantities = new Map()
       for (const item of order.items ?? []) {
         if (!item?.productId || !Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
           fail('failed-precondition', 'Order inventory details are invalid.')
         }
         quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity)
+        if (item.inventoryAuthority === 'variant') {
+          if (typeof item.variantId !== 'string' || !item.variantId) {
+            fail('failed-precondition', 'Order inventory details are invalid.')
+          }
+          const key = `${item.productId}\u0000${item.variantId}`
+          variantQuantities.set(key, (variantQuantities.get(key) ?? 0) + item.quantity)
+        } else if (item.inventoryAuthority === undefined || item.inventoryAuthority === 'product') {
+          productPoolQuantities.set(
+            item.productId,
+            (productPoolQuantities.get(item.productId) ?? 0) + item.quantity,
+          )
+        } else {
+          fail('failed-precondition', 'Order inventory details are invalid.')
+        }
       }
       const productRefs = [...quantities.keys()].map((id) => db.doc(`products/${id}`))
       const productSnapshots = productRefs.length ? await transaction.getAll(...productRefs) : []
@@ -1252,8 +1549,36 @@ export const cancelOrder = onCall(checkoutOptions(), async (request) => {
         if (!Number.isSafeInteger(stock) || !Number.isSafeInteger(soldCount) || soldCount < quantity) {
           fail('failed-precondition', 'Order inventory details are invalid.')
         }
+        const productPoolQuantity = productPoolQuantities.get(productId) ?? 0
+        const variantRestorations = [...variantQuantities.entries()]
+          .filter(([key]) => key.startsWith(`${productId}\u0000`))
+          .map(([key, restoredQuantity]) => ({
+            variantId: key.slice(key.indexOf('\u0000') + 1),
+            quantity: restoredQuantity,
+          }))
+        let variants
+        let nextStock = stock + productPoolQuantity
+        if (variantRestorations.length) {
+          const inventory = authoritativeProductInventory(
+            product,
+            'Order inventory details are invalid.',
+          )
+          if (!inventory.hasVariants || productPoolQuantity > 0) {
+            fail('failed-precondition', 'Order inventory details are invalid.')
+          }
+          const restorationByVariant = new Map(variantRestorations.map((entry) => [entry.variantId, entry.quantity]))
+          if ([...restorationByVariant.keys()].some((variantId) => !inventory.byId.has(variantId))) {
+            fail('failed-precondition', 'Order inventory details are invalid.')
+          }
+          variants = inventory.variants.map((variant) => ({
+            ...variant,
+            stock: variant.stock + (restorationByVariant.get(variant.id) ?? 0),
+          }))
+          nextStock = inventory.stock + variantRestorations.reduce((sum, entry) => sum + entry.quantity, 0)
+        }
         transaction.update(db.doc(`products/${productId}`), {
-          stock: stock + quantity,
+          stock: nextStock,
+          ...(variants ? { variants } : {}),
           soldCount: soldCount - quantity,
           updatedAt: FieldValue.serverTimestamp(),
         })

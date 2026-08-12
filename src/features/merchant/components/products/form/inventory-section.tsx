@@ -7,9 +7,11 @@ import { optionalNumber, type ProductFormValues } from '../product-form.schema'
 interface InventorySectionProps {
   register: UseFormRegister<ProductFormValues>
   errors: FieldErrors<ProductFormValues>
+  hasVariants: boolean
+  variantStockTotal: number
 }
 
-export function InventorySection({ register, errors }: InventorySectionProps) {
+export function InventorySection({ register, errors, hasVariants, variantStockTotal }: InventorySectionProps) {
   return (
     <Card>
       <CardHeader>
@@ -26,7 +28,16 @@ export function InventorySection({ register, errors }: InventorySectionProps) {
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <FormField label="Stock" required error={errors.stock?.message}>
-            <Input type="number" min="0" placeholder="0" {...register('stock', optionalNumber)} />
+            {hasVariants ? (
+              <>
+                <Input type="number" value={variantStockTotal} readOnly aria-label="Total variant stock" />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Derived automatically from the variant stock rows.
+                </p>
+              </>
+            ) : (
+              <Input type="number" min="0" placeholder="0" {...register('stock', optionalNumber)} />
+            )}
           </FormField>
           <FormField label="Low-stock alert at" error={errors.lowStockThreshold?.message}>
             <Input type="number" min="0" placeholder="5" {...register('lowStockThreshold', optionalNumber)} />

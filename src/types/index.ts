@@ -216,6 +216,8 @@ export interface OrderItem {
   variant?: Record<string, string>
   variantId?: string
   sku?: string
+  /** New orders record which inventory pool checkout actually decremented. */
+  inventoryAuthority?: 'product' | 'variant'
 }
 
 export interface OrderTimelineEntry {
@@ -458,6 +460,9 @@ export interface InventoryLog {
   change: number
   reason: 'sale' | 'restock' | 'adjustment' | 'return'
   note?: string
+  variantId?: string
+  variant?: Record<string, string>
+  sku?: string | null
   by: string
   createdAt: number
 }
